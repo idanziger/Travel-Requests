@@ -187,6 +187,19 @@ function TravelForm({ userId }: { userId: string | undefined }) {
           </div>
         </div>
 
+        {/* Notes Section */}
+        <div className="space-y-2">
+          <label className="text-[11px] font-bold text-slate-400 uppercase">Additional Notes (Optional)</label>
+          <textarea 
+            name="notes"
+            value={formData.notes}
+            onChange={handleInputChange}
+            placeholder="Provide any extra details about the trip or requirements..."
+            rows={3}
+            className="w-full bg-[#1a1b2e] border border-slate-700 rounded-lg p-4 text-sm text-slate-300 outline-none focus:border-indigo-500 transition-all resize-none"
+          />
+        </div>
+
         <button type="submit" disabled={isSubmitting || !userId} className={`w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg transition-all shadow-lg flex items-center justify-center gap-2 ${isSubmitting || !userId ? 'opacity-50' : ''}`}>
           {isSubmitting ? 'Submitting...' : 'Submit Request'}
         </button>

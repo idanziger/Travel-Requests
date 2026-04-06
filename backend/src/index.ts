@@ -34,7 +34,6 @@ app.get('/auth/google/callback', async (req, res) => {
       return res.status(401).send('Authentication failed');
     }
 
-    // CHECK GOOGLE GROUPS FOR ROLE
     const role = await getUserRoleFromGroups(user.email);
     if (!role) {
       return res.status(403).send(`
@@ -111,19 +110,31 @@ app.get('/api/requests', async (req, res) => {
   } catch (error) { res.status(500).json({ error: 'Failed to fetch requests' }); }
 });
 
-// 6. Update Status
+// 6. Update Status & Approver Notes
 app.patch('/api/requests/:id/status', async (req, res) => {
   const { id } = req.params;
-  const { status, managerId } = req.body;
+  const { status, managerId, approver_notes } = req.body;
   try {
     const managerCheck = await query('SELECT role FROM users WHERE id = $1', [managerId]);
     if (managerCheck.rows.length === 0 || managerCheck.rows[0].role !== 'manager') return res.status(403).json({ error: 'Unauthorized' });
+    
     const requestDetails = await query(`SELECT r.*, u.email as requester_email FROM travel_requests r JOIN users u ON r.requester_id = u.id WHERE r.id = $1`, [id]);
     if (requestDetails.rows.length === 0) return res.status(404).json({ error: 'Not found' });
-    const result = await query(`UPDATE travel_requests SET status = $1 WHERE id = $2 RETURNING *`, [status, id]);
-    notifyStatusChange(requestDetails.rows[0].requester_email, requestDetails.rows[0].traveler_name, status);
+    
+    const result = await query(
+      `UPDATE travel_requests SET status = $1, approver_notes = $2 WHERE id = $3 RETURNING *`, 
+      [status || requestDetails.rows[0].status, approver_notes, id]
+    );
+    
+    if (status) {
+      notifyStatusChange(requestDetails.rows[0].requester_email, requestDetails.rows[0].traveler_name, status);
+    }
+    
     res.json(result.rows[0]);
-  } catch (error: any) { res.status(500).json({ error: 'Failed to update' }); }
+  } catch (error: any) { 
+    console.error('Error updating:', error);
+    res.status(500).json({ error: 'Failed to update' }); 
+  }
 });
 
 // 7. Get Tasks

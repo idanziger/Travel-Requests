@@ -3,16 +3,24 @@ import dotenv from 'dotenv';
 
 dotenv.config({ path: '../.env' });
 
+const googleClientId = process.env.GOOGLE_CLIENT_ID;
+const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+const googleCallbackUrl = process.env.GOOGLE_CALLBACK_URL;
+
+if (!googleClientId || !googleClientSecret || !googleCallbackUrl) {
+  throw new Error('Missing Google OAuth configuration in .env');
+}
+
 const client = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_CALLBACK_URL
+  googleClientId,
+  googleClientSecret,
+  googleCallbackUrl
 );
 
-// 1. Function to get the URL for the user to visit
 export const getGoogleAuthUrl = () => {
   return client.generateAuthUrl({
     access_type: 'offline',
+    prompt: 'consent',
     scope: [
       'https://www.googleapis.com/auth/userinfo.profile',
       'https://www.googleapis.com/auth/userinfo.email',
@@ -20,12 +28,16 @@ export const getGoogleAuthUrl = () => {
   });
 };
 
-// 2. Function to verify the code Google sends back
 export const getGoogleUser = async (code: string) => {
   const { tokens } = await client.getToken(code);
+  if (!tokens.id_token) {
+    throw new Error('Google did not return an ID token');
+  }
+
   const ticket = await client.verifyIdToken({
-    idToken: tokens.id_token!,
-    audience: process.env.GOOGLE_CLIENT_ID,
+    idToken: tokens.id_token,
+    audience: googleClientId,
   });
+
   return ticket.getPayload();
 };

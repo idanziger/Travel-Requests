@@ -4,14 +4,44 @@ import dotenv from 'dotenv';
 import { getGoogleAuthUrl, getGoogleUser } from './auth';
 import { query } from './db';
 import { notifyNewRequest, notifyStatusChange } from './notifications';
-import { getUserRoleFromGroups } from './google-groups';
+import {
+  debugGroupMembership,
+  debugListGroupMembers,
+  getUserRoleFromGroups,
+} from './google-groups';
+import {
+  clearSessionCookie,
+  type AuthenticatedRequest,
+  requireAdmin,
+  requireAuth,
+  setSessionCookie,
+  signSessionToken,
+} from './session';
 
 dotenv.config({ path: '../.env' });
 
 const app = express();
 const port = process.env.PORT || 3001;
+const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+const allowedEmailDomain = (process.env.ALLOWED_EMAIL_DOMAIN || 'ssvlabs.io').toLowerCase();
+const allowedOrigins = new Set(
+  [frontendUrl, process.env.FRONTEND_URL_ALT, 'http://localhost:5173', 'http://127.0.0.1:5173']
+    .filter(Boolean)
+    .map((origin) => origin as string)
+);
 
-app.use(cors());
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.has(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error('Origin not allowed by CORS'));
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 // 1. Health check
@@ -34,6 +64,15 @@ app.get('/auth/google/callback', async (req, res) => {
       return res.status(401).send('Authentication failed');
     }
 
+    const normalizedEmail = user.email.toLowerCase();
+    const isAllowedDomain =
+      normalizedEmail.endsWith(`@${allowedEmailDomain}`) &&
+      (!user.hd || user.hd.toLowerCase() === allowedEmailDomain);
+
+    if (!isAllowedDomain) {
+      return res.status(403).send('Only SSV Labs Google Workspace accounts can access this app.');
+    }
+
     const role = await getUserRoleFromGroups(user.email);
     if (!role) {
       return res.status(403).send(`
@@ -41,12 +80,18 @@ app.get('/auth/google/callback', async (req, res) => {
           <h1 style="color: #e11d48;">Access Denied</h1>
           <p>You do not have permission to access the Travel App.</p>
           <p>Please contact your admin to be added to the authorized Google Groups.</p>
-          <a href="http://localhost:5173" style="color: #4f46e5; text-decoration: none;">Return Home</a>
+          <a href="${frontendUrl}" style="color: #4f46e5; text-decoration: none;">Return Home</a>
         </div>
       `);
     }
 
-    const { sub, email, name, picture } = user;
+    const { sub, email, picture } = user;
+    const name = user.name || email;
+
+    if (!sub) {
+      return res.status(401).send('Authentication failed: Google user ID missing');
+    }
+
     console.log(`Authenticated: ${email} as ${role}. Saving...`);
 
     try {
@@ -60,8 +105,17 @@ app.get('/auth/google/callback', async (req, res) => {
       );
       
       const dbUser = result.rows[0];
-      const frontendUrl = `http://localhost:5173?userId=${dbUser.id}&userName=${encodeURIComponent(name)}&userRole=${dbUser.role}`;
-      res.redirect(frontendUrl);
+      const sessionToken = signSessionToken({
+        id: dbUser.id,
+        email,
+        name,
+        role: dbUser.role,
+      });
+
+      setSessionCookie(res, sessionToken);
+
+      const redirectUrl = `${frontendUrl}/auth/callback`;
+      res.redirect(redirectUrl);
 
     } catch (dbError) {
       console.error('Database Error:', dbError);
@@ -73,51 +127,107 @@ app.get('/auth/google/callback', async (req, res) => {
   }
 });
 
+app.get('/api/auth/me', requireAuth, async (req: AuthenticatedRequest, res) => {
+  res.json({ user: req.user });
+});
+
+app.get('/api/debug/group-membership', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).send('Not found');
+  }
+
+  const email = req.query.email as string;
+  if (!email) {
+    return res.status(400).json({ error: 'email query param required' });
+  }
+
+  const result = await debugGroupMembership(email);
+  res.json(result);
+});
+
+app.get('/api/debug/group-members', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).send('Not found');
+  }
+
+  const group = req.query.group as string;
+  if (!group) {
+    return res.status(400).json({ error: 'group query param required' });
+  }
+
+  const result = await debugListGroupMembers(group);
+  res.json(result);
+});
+
+app.post('/auth/logout', (req, res) => {
+  clearSessionCookie(res);
+  res.status(204).send();
+});
+
 // 4. Save Request
-app.post('/api/requests', async (req, res) => {
-  const { requester_id, traveler_name, event_name, department, budget_code, notes, start_date, end_date, requested_expenses } = req.body;
+app.post('/api/requests', requireAuth, async (req: AuthenticatedRequest, res) => {
+  const {
+    traveler_name,
+    event_name,
+    department,
+    budget_code,
+    notes,
+    start_date,
+    end_date,
+    requested_expenses,
+  } = req.body;
   try {
     const result = await query(
       `INSERT INTO travel_requests (requester_id, traveler_name, event_name, department, budget_code, notes, start_date, end_date) 
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [requester_id || 1, traveler_name, event_name, department, budget_code, notes, start_date, end_date]
+      [
+        req.user!.id,
+        traveler_name,
+        event_name,
+        department,
+        budget_code,
+        notes,
+        start_date,
+        end_date,
+      ]
     );
     const newRequest = result.rows[0];
     if (requested_expenses && requested_expenses.length > 0) {
-      const taskValues = requested_expenses.map((task: string) => `(${newRequest.id}, '${task}')`).join(', ');
-      await query(`INSERT INTO request_tasks (request_id, task_name) VALUES ${taskValues}`, []);
+      await Promise.all(
+        requested_expenses.map((task: string) =>
+          query(
+            'INSERT INTO request_tasks (request_id, task_name) VALUES ($1, $2)',
+            [newRequest.id, task]
+          )
+        )
+      );
     }
-    const managerResult = await query('SELECT name FROM users WHERE id = $1', [requester_id || 1]);
-    notifyNewRequest(managerResult.rows[0]?.name || 'Manager', traveler_name, event_name);
+    await notifyNewRequest(req.user!.name, traveler_name, event_name);
     res.status(201).json(newRequest);
   } catch (error: any) { res.status(500).json({ error: 'Failed to save request' }); }
 });
 
 // 5. Get Requests
-app.get('/api/requests', async (req, res) => {
-  const userId = req.query.userId;
+app.get('/api/requests', requireAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const userResult = await query('SELECT role FROM users WHERE id = $1', [userId]);
-    if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' });
-    const userRole = userResult.rows[0].role;
     let result;
-    if (userRole === 'manager' || userRole === 'admin') {
+    if (req.user!.role === 'admin') {
       result = await query(`SELECT r.*, u.name as requester_name, u.email as requester_email FROM travel_requests r JOIN users u ON r.requester_id = u.id ORDER BY r.request_date DESC`);
     } else {
-      result = await query(`SELECT * FROM travel_requests WHERE requester_id = $1 ORDER BY request_date DESC`, [userId]);
+      result = await query(
+        `SELECT * FROM travel_requests WHERE requester_id = $1 ORDER BY request_date DESC`,
+        [req.user!.id]
+      );
     }
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: 'Failed to fetch requests' }); }
 });
 
 // 6. Update Status & Approver Notes
-app.patch('/api/requests/:id/status', async (req, res) => {
+app.patch('/api/requests/:id/status', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res) => {
   const { id } = req.params;
-  const { status, managerId, approver_notes } = req.body;
+  const { status, approver_notes } = req.body;
   try {
-    const managerCheck = await query('SELECT role FROM users WHERE id = $1', [managerId]);
-    if (managerCheck.rows.length === 0 || managerCheck.rows[0].role !== 'manager') return res.status(403).json({ error: 'Unauthorized' });
-    
     const requestDetails = await query(`SELECT r.*, u.email as requester_email FROM travel_requests r JOIN users u ON r.requester_id = u.id WHERE r.id = $1`, [id]);
     if (requestDetails.rows.length === 0) return res.status(404).json({ error: 'Not found' });
     
@@ -138,16 +248,24 @@ app.patch('/api/requests/:id/status', async (req, res) => {
 });
 
 // 7. Get Tasks
-app.get('/api/requests/:id/tasks', async (req, res) => {
+app.get('/api/requests/:id/tasks', requireAuth, async (req: AuthenticatedRequest, res) => {
   const { id } = req.params;
   try {
+    if (req.user!.role !== 'admin') {
+      const requestResult = await query('SELECT requester_id FROM travel_requests WHERE id = $1', [id]);
+      if (requestResult.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+      if (requestResult.rows[0].requester_id !== req.user!.id) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+
     const result = await query('SELECT * FROM request_tasks WHERE request_id = $1 ORDER BY id ASC', [id]);
     res.json(result.rows);
   } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
 // 8. Update Task
-app.patch('/api/tasks/:id', async (req, res) => {
+app.patch('/api/tasks/:id', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res) => {
   const { id } = req.params;
   const { status } = req.body;
   try {
@@ -157,7 +275,7 @@ app.patch('/api/tasks/:id', async (req, res) => {
 });
 
 // 9. New Task
-app.post('/api/requests/:id/tasks', async (req, res) => {
+app.post('/api/requests/:id/tasks', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res) => {
   const { id } = req.params;
   const { task_name } = req.body;
   try {

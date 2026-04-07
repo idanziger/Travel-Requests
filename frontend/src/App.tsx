@@ -1,43 +1,45 @@
-import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom';
-import { Calendar, User, FileText, Briefcase, DollarSign, Clock, CheckCircle2, AlertCircle, LayoutDashboard, PlusCircle, LogOut, CheckSquare } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { BrowserRouter as Router, Routes, Route, Link, Navigate, useNavigate } from 'react-router-dom';
+import { ArrowRight, CheckCircle2, AlertCircle, LayoutDashboard, PlusCircle, LogOut, CheckSquare, ShieldCheck, Send, Users, Sparkles, Building2 } from 'lucide-react';
 import axios from 'axios';
 import Dashboard from './pages/Dashboard';
+import { API_BASE_URL } from './config';
 
-// --- Helper to handle User Session ---
-const useAuth = () => {
-  const [user, setUser] = useState<{ id: string; name: string; role: string } | null>(null);
-  const location = useLocation();
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const userId = params.get('userId');
-    const userName = params.get('userName');
-    const userRole = params.get('userRole');
-
-    if (userId && userName && userRole) {
-      const newUser = { id: userId, name: userName, role: userRole };
-      localStorage.setItem('user', JSON.stringify(newUser));
-      setUser(newUser);
-      navigate('/', { replace: true });
-    } else {
-      const savedUser = localStorage.getItem('user');
-      if (savedUser) setUser(JSON.parse(savedUser));
-    }
-  }, [location]);
-
-  const logout = () => {
-    localStorage.removeItem('user');
-    setUser(null);
-    navigate('/');
-  };
-
-  return { user, logout };
+type AuthUser = {
+  id: number;
+  email: string;
+  name: string;
+  role: 'employee' | 'admin';
 };
 
-// --- Form Component ---
-function TravelForm({ userId }: { userId: string | undefined }) {
+const useAuth = () => {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const refreshUser = async () => {
+    try {
+      const response = await axios.get('/api/auth/me');
+      setUser(response.data.user);
+    } catch {
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshUser();
+  }, []);
+
+  const logout = async () => {
+    await axios.post('/auth/logout');
+    setUser(null);
+  };
+
+  return { user, loading, refreshUser, logout };
+};
+
+function TravelForm({ user }: { user: AuthUser }) {
   const [formData, setFormData] = useState({
     traveler_name: '',
     event_name: '',
@@ -61,11 +63,6 @@ function TravelForm({ userId }: { userId: string | undefined }) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userId) {
-      setStatus({ type: 'error', message: 'Please sign in with Google first.' });
-      return;
-    }
-
     setIsSubmitting(true);
     setStatus({ type: null, message: '' });
 
@@ -77,14 +74,13 @@ function TravelForm({ userId }: { userId: string | undefined }) {
       if (expenses.meals) requestedExpenses.push('🍲 Meals & Food');
       if (expenses.transport) requestedExpenses.push('🚗 Local Transport');
 
-      await axios.post('http://localhost:3001/api/requests', { 
+      await axios.post('/api/requests', { 
         ...formData, 
-        requester_id: parseInt(userId),
         requested_expenses: requestedExpenses
       });
 
       setStatus({ type: 'success', message: 'Travel request submitted successfully!' });
-      setTimeout(() => navigate('/dashboard'), 2000);
+      setTimeout(() => navigate('/dashboard'), 1200);
     } catch (error: any) {
       setStatus({ type: 'error', message: 'Failed to submit request.' });
     } finally {
@@ -102,10 +98,17 @@ function TravelForm({ userId }: { userId: string | undefined }) {
   };
 
   return (
-    <div className="w-full max-w-2xl bg-[#242645] rounded-xl shadow-2xl p-8 space-y-8 border border-slate-700">
+    <div className="w-full max-w-3xl bg-[#0f1729]/90 rounded-[28px] shadow-[0_40px_120px_rgba(7,12,28,0.45)] p-8 md:p-10 space-y-8 border border-white/10 backdrop-blur-xl">
       <header className="space-y-1">
-        <h2 className="text-xl font-bold text-white tracking-tight">Create Travel Request</h2>
-        <p className="text-slate-400 text-xs italic uppercase tracking-widest font-bold">New Submission</p>
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <p className="text-[11px] font-black text-cyan-300/80 uppercase tracking-[0.35em]">Executive Travel Desk</p>
+            <h2 className="text-2xl md:text-3xl font-semibold text-white tracking-tight" style={{ fontFamily: 'Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif' }}>Create Travel Request</h2>
+          </div>
+          <div className="rounded-full border border-cyan-300/15 bg-cyan-300/5 px-4 py-2 text-[11px] uppercase tracking-[0.28em] text-slate-300">
+            Signed in as {user.name}
+          </div>
+        </div>
       </header>
 
       {status.type && (
@@ -116,23 +119,22 @@ function TravelForm({ userId }: { userId: string | undefined }) {
       )}
 
       <form onSubmit={handleSubmit} className="space-y-8">
-        {/* Core Info Section */}
         <div className="space-y-4">
-          <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-700 pb-2">Basic Information</h3>
+          <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.35em] border-b border-white/10 pb-2">Basic Information</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-1">
               <label className="text-[11px] font-bold text-slate-400 uppercase">Traveler Name *</label>
-              <input required name="traveler_name" value={formData.traveler_name} onChange={handleInputChange} placeholder="Who is traveling?" className="w-full bg-[#1a1b2e] border border-slate-700 rounded-lg px-4 py-2.5 outline-none focus:border-indigo-500 transition-all" />
+              <input required name="traveler_name" value={formData.traveler_name} onChange={handleInputChange} placeholder="Who is traveling?" className="w-full bg-[#09101f] border border-white/10 rounded-2xl px-4 py-3 outline-none focus:border-cyan-400 transition-all" />
             </div>
             <div className="space-y-1">
               <label className="text-[11px] font-bold text-slate-400 uppercase">Event / Purpose *</label>
-              <input required name="event_name" value={formData.event_name} onChange={handleInputChange} placeholder="e.g. Sales Summit" className="w-full bg-[#1a1b2e] border border-slate-700 rounded-lg px-4 py-2.5 outline-none focus:border-indigo-500 transition-all" />
+              <input required name="event_name" value={formData.event_name} onChange={handleInputChange} placeholder="e.g. Leadership Summit" className="w-full bg-[#09101f] border border-white/10 rounded-2xl px-4 py-3 outline-none focus:border-cyan-400 transition-all" />
             </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-1">
               <label className="text-[11px] font-bold text-slate-400 uppercase">Department *</label>
-              <select required name="department" value={formData.department} onChange={handleInputChange} className="w-full bg-[#1a1b2e] border border-slate-700 rounded-lg px-4 py-2.5 outline-none appearance-none">
+              <select required name="department" value={formData.department} onChange={handleInputChange} className="w-full bg-[#09101f] border border-white/10 rounded-2xl px-4 py-3 outline-none appearance-none">
                 <option value="">Select Dept</option>
                 <option value="Engineering">Engineering</option>
                 <option value="Sales">Sales</option>
@@ -141,14 +143,13 @@ function TravelForm({ userId }: { userId: string | undefined }) {
             </div>
             <div className="space-y-1">
               <label className="text-[11px] font-bold text-slate-400 uppercase">Project / Cost Center *</label>
-              <input required name="budget_code" value={formData.budget_code} onChange={handleInputChange} placeholder="e.g. BGT-2026" className="w-full bg-[#1a1b2e] border border-slate-700 rounded-lg px-4 py-2.5 outline-none focus:border-indigo-500 transition-all" />
+              <input required name="budget_code" value={formData.budget_code} onChange={handleInputChange} placeholder="e.g. EXEC-2026" className="w-full bg-[#09101f] border border-white/10 rounded-2xl px-4 py-3 outline-none focus:border-cyan-400 transition-all" />
             </div>
           </div>
         </div>
 
-        {/* Expense Selection Section */}
         <div className="space-y-4">
-          <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-700 pb-2 flex items-center gap-2"><CheckSquare size={14}/> Requested Expenses</h3>
+          <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.35em] border-b border-white/10 pb-2 flex items-center gap-2"><CheckSquare size={14}/> Requested Expenses</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {[
               { id: 'airfare', label: '✈️ Airfare' },
@@ -160,10 +161,10 @@ function TravelForm({ userId }: { userId: string | undefined }) {
                 key={exp.id}
                 type="button"
                 onClick={() => toggleExpense(exp.id as keyof typeof expenses)}
-                className={`p-3 rounded-lg border text-xs font-bold transition-all text-center ${
+                className={`p-3 rounded-2xl border text-xs font-bold transition-all text-center ${
                   expenses[exp.id as keyof typeof expenses] 
-                    ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/20' 
-                    : 'bg-slate-800 border-slate-700 text-slate-500'
+                    ? 'bg-cyan-400/15 border-cyan-300/35 text-white shadow-[0_18px_40px_rgba(66,191,248,0.18)]' 
+                    : 'bg-[#09101f] border-white/10 text-slate-500'
                 }`}
               >
                 {exp.label}
@@ -172,22 +173,20 @@ function TravelForm({ userId }: { userId: string | undefined }) {
           </div>
         </div>
 
-        {/* Dates Section */}
         <div className="space-y-4">
-          <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-700 pb-2">Travel Dates</h3>
+          <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.35em] border-b border-white/10 pb-2">Travel Dates</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-1">
               <label className="text-[11px] font-bold text-slate-400 uppercase">Start Date *</label>
-              <input required type="date" name="start_date" value={formData.start_date} onChange={handleInputChange} className="w-full bg-[#1a1b2e] border border-slate-700 rounded-lg px-4 py-2.5 outline-none" />
+              <input required type="date" name="start_date" value={formData.start_date} onChange={handleInputChange} className="w-full bg-[#09101f] border border-white/10 rounded-2xl px-4 py-3 outline-none focus:border-cyan-400" />
             </div>
             <div className="space-y-1">
               <label className="text-[11px] font-bold text-slate-400 uppercase">End Date *</label>
-              <input required type="date" name="end_date" value={formData.end_date} onChange={handleInputChange} className="w-full bg-[#1a1b2e] border border-slate-700 rounded-lg px-4 py-2.5 outline-none" />
+              <input required type="date" name="end_date" value={formData.end_date} onChange={handleInputChange} className="w-full bg-[#09101f] border border-white/10 rounded-2xl px-4 py-3 outline-none focus:border-cyan-400" />
             </div>
           </div>
         </div>
 
-        {/* Notes Section */}
         <div className="space-y-2">
           <label className="text-[11px] font-bold text-slate-400 uppercase">Additional Notes (Optional)</label>
           <textarea 
@@ -196,11 +195,11 @@ function TravelForm({ userId }: { userId: string | undefined }) {
             onChange={handleInputChange}
             placeholder="Provide any extra details about the trip or requirements..."
             rows={3}
-            className="w-full bg-[#1a1b2e] border border-slate-700 rounded-lg p-4 text-sm text-slate-300 outline-none focus:border-indigo-500 transition-all resize-none"
+            className="w-full bg-[#09101f] border border-white/10 rounded-2xl p-4 text-sm text-slate-300 outline-none focus:border-cyan-400 transition-all resize-none"
           />
         </div>
 
-        <button type="submit" disabled={isSubmitting || !userId} className={`w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg transition-all shadow-lg flex items-center justify-center gap-2 ${isSubmitting || !userId ? 'opacity-50' : ''}`}>
+        <button type="submit" disabled={isSubmitting} className={`w-full bg-gradient-to-r from-cyan-400 via-sky-400 to-indigo-400 text-slate-950 font-bold py-3.5 px-6 rounded-2xl transition-all shadow-[0_24px_48px_rgba(66,191,248,0.28)] flex items-center justify-center gap-2 ${isSubmitting ? 'opacity-50' : 'hover:scale-[1.01]'}`}>
           {isSubmitting ? 'Submitting...' : 'Submit Request'}
         </button>
       </form>
@@ -208,34 +207,227 @@ function TravelForm({ userId }: { userId: string | undefined }) {
   );
 }
 
-// --- Main App Wrapper ---
-function AppContent() {
-  const { user, logout } = useAuth();
+function LandingPage() {
   return (
-    <div className="min-h-screen bg-[#1a1b2e] text-slate-200 p-8 flex flex-col items-center">
-      <nav className="w-full max-w-6xl flex justify-between items-center mb-12">
-        <Link to="/" className="flex items-center gap-3">
-          <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-600/20"><FileText className="text-white" size={24} /></div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Travel Requests</h1>
-        </Link>
-        <div className="flex items-center gap-4">
-          <Link to="/dashboard" className="text-sm font-bold text-slate-400 hover:text-white transition-all uppercase tracking-widest flex items-center gap-2"><LayoutDashboard size={18}/> Board</Link>
-          <Link to="/" className="text-sm font-bold text-slate-400 hover:text-white transition-all uppercase tracking-widest flex items-center gap-2"><PlusCircle size={18}/> New</Link>
-          {user ? (
-            <div className="flex items-center gap-4 ml-6 pl-6 border-l border-slate-700">
-              <span className="text-[10px] font-black text-indigo-400 bg-indigo-400/5 px-3 py-1.5 rounded-full border border-indigo-400/20 uppercase">Hi, {user.name}</span>
-              <button onClick={logout} className="text-slate-500 hover:text-rose-400 transition-colors"><LogOut size={20} /></button>
+    <div className="min-h-screen bg-[#06101d] text-slate-100 overflow-hidden">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(66,191,248,0.16),_transparent_38%),radial-gradient(circle_at_80%_20%,_rgba(104,132,255,0.16),_transparent_32%),linear-gradient(180deg,_#071120_0%,_#040811_100%)]" />
+      <div className="absolute inset-0 opacity-30" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)', backgroundSize: '72px 72px' }} />
+      <div className="relative min-h-screen">
+        <header className="mx-auto flex max-w-7xl items-center justify-between px-6 py-8 md:px-10">
+          <div className="flex items-center gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-300/20 bg-white/5 shadow-[0_18px_40px_rgba(66,191,248,0.14)]">
+              <Building2 className="text-cyan-300" size={22} />
             </div>
-          ) : (
-            <a href="http://localhost:3001/auth/google" className="bg-indigo-600 hover:bg-indigo-700 text-[11px] font-black py-2.5 px-6 rounded-lg transition-all ml-4 uppercase tracking-widest">Sign in with Google</a>
-          )}
-        </div>
-      </nav>
-      <Routes>
-        <Route path="/" element={<TravelForm userId={user?.id} />} />
-        <Route path="/dashboard" element={<Dashboard userId={user?.id} userRole={user?.role} />} />
-      </Routes>
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.4em] text-cyan-200/70">SSV Labs</div>
+              <div className="text-lg font-semibold text-white">Travel Desk</div>
+            </div>
+          </div>
+          <a href={`${API_BASE_URL}/auth/google`} className="rounded-full border border-white/15 bg-white/8 px-5 py-3 text-xs font-black uppercase tracking-[0.28em] text-white transition hover:border-cyan-300/35 hover:bg-cyan-300/10">
+            Sign In With Google
+          </a>
+        </header>
+
+        <main className="mx-auto grid max-w-7xl gap-14 px-6 pb-16 pt-4 md:grid-cols-[1.2fr_0.9fr] md:px-10 md:pb-24 md:pt-12">
+          <section className="space-y-8">
+            <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/8 px-4 py-2 text-[11px] font-black uppercase tracking-[0.3em] text-cyan-200">
+              <Sparkles size={14} />
+              Internal Executive Operations
+            </div>
+            <div className="space-y-6">
+              <h1 className="max-w-4xl text-5xl font-semibold leading-[0.95] text-white md:text-7xl" style={{ fontFamily: 'Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif' }}>
+                Premium travel approvals for a fast-moving leadership team.
+              </h1>
+              <p className="max-w-2xl text-lg leading-8 text-slate-300">
+                SSV Labs Travel Desk centralizes employee requests, executive approvals, and operational follow-through in one secure internal workflow powered by Google Workspace.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4">
+              <a href={`${API_BASE_URL}/auth/google`} className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-cyan-300 via-sky-300 to-indigo-300 px-7 py-4 text-sm font-black uppercase tracking-[0.22em] text-slate-950 shadow-[0_30px_70px_rgba(66,191,248,0.28)] transition hover:scale-[1.01]">
+                Enter Travel Desk
+                <ArrowRight size={18} />
+              </a>
+              <div className="rounded-full border border-white/10 px-5 py-4 text-sm text-slate-400">
+                Access restricted to <span className="font-semibold text-white">@ssvlabs.io</span> Google Workspace users
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-3">
+              {[
+                { icon: ShieldCheck, title: 'Workspace-Verified Access', copy: 'Google sign-in, group-based authorization, and secure server-issued sessions.' },
+                { icon: Send, title: 'Approval Routing', copy: 'New submissions notify the admin group immediately without manual forwarding.' },
+                { icon: Users, title: 'Clear Roles', copy: 'Admins manage the full board while employees see only their own requests.' },
+              ].map((item) => (
+                <div key={item.title} className="rounded-[26px] border border-white/10 bg-white/5 p-6 backdrop-blur-xl">
+                  <item.icon className="mb-5 text-cyan-300" size={20} />
+                  <h3 className="mb-2 text-sm font-black uppercase tracking-[0.24em] text-white">{item.title}</h3>
+                  <p className="text-sm leading-7 text-slate-400">{item.copy}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="relative">
+            <div className="absolute -left-8 top-8 h-24 w-24 rounded-full bg-cyan-300/20 blur-3xl" />
+            <div className="absolute right-0 top-32 h-28 w-28 rounded-full bg-indigo-400/20 blur-3xl" />
+            <div className="relative rounded-[32px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.12),rgba(255,255,255,0.04))] p-7 shadow-[0_40px_120px_rgba(7,12,28,0.45)] backdrop-blur-2xl">
+              <div className="mb-8 flex items-center justify-between">
+                <div>
+                  <div className="text-[11px] font-black uppercase tracking-[0.3em] text-cyan-200/75">Approval Board</div>
+                  <div className="mt-2 text-2xl text-white" style={{ fontFamily: 'Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif' }}>Travel oversight, without the chaos.</div>
+                </div>
+                <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.28em] text-emerald-200">
+                  Internal
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {[
+                  ['Executive Summit', 'Pending Review', 'Finance / London'],
+                  ['Board Strategy Offsite', 'Approved', 'Leadership / Paris'],
+                  ['Partner Visit', 'Need More Info', 'Sales / New York'],
+                ].map(([title, status, meta]) => (
+                  <div key={title} className="rounded-[24px] border border-white/10 bg-[#081120]/80 p-5">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <div className="text-sm font-semibold text-white">{title}</div>
+                        <div className="mt-1 text-xs uppercase tracking-[0.24em] text-slate-500">{meta}</div>
+                      </div>
+                      <div className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.28em] ${
+                        status === 'Approved'
+                          ? 'bg-emerald-300/10 text-emerald-200'
+                          : status === 'Need More Info'
+                            ? 'bg-amber-300/10 text-amber-200'
+                            : 'bg-cyan-300/10 text-cyan-200'
+                      }`}>
+                        {status}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
     </div>
+  );
+}
+
+function AuthCallbackPage({ refreshUser }: { refreshUser: () => Promise<void> }) {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const completeLogin = async () => {
+      await refreshUser();
+      navigate('/dashboard', { replace: true });
+    };
+
+    void completeLogin();
+  }, [navigate, refreshUser]);
+
+  return (
+    <div className="min-h-screen bg-[#06101d] text-white flex items-center justify-center">
+      <div className="rounded-[28px] border border-white/10 bg-white/5 px-8 py-10 text-center backdrop-blur-xl">
+        <div className="mb-3 text-[11px] font-black uppercase tracking-[0.32em] text-cyan-200/75">Authenticating</div>
+        <div className="text-2xl" style={{ fontFamily: 'Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif' }}>Completing secure sign-in</div>
+      </div>
+    </div>
+  );
+}
+
+function ProtectedRoute({
+  user,
+  loading,
+  children,
+}: {
+  user: AuthUser | null;
+  loading: boolean;
+  children: React.ReactNode;
+}) {
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#06101d] text-white flex items-center justify-center">
+        <div className="rounded-[28px] border border-white/10 bg-white/5 px-8 py-10 backdrop-blur-xl">
+          Loading secure workspace session...
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+function AppShell({
+  user,
+  logout,
+}: {
+  user: AuthUser;
+  logout: () => Promise<void>;
+}) {
+  return (
+    <div className="min-h-screen bg-[#06101d] text-slate-200">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,_rgba(66,191,248,0.11),_transparent_25%),radial-gradient(circle_at_82%_0%,_rgba(104,132,255,0.1),_transparent_24%)]" />
+      <div className="relative p-6 md:p-8 flex flex-col items-center">
+        <nav className="w-full max-w-7xl flex justify-between items-center mb-10 flex-wrap gap-4">
+          <Link to="/dashboard" className="flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-300/20 bg-white/5 shadow-[0_18px_40px_rgba(66,191,248,0.16)]"><Building2 className="text-cyan-300" size={22} /></div>
+            <div>
+              <div className="text-[11px] font-black uppercase tracking-[0.34em] text-cyan-200/70">SSV Labs</div>
+              <h1 className="text-2xl font-semibold text-white tracking-tight" style={{ fontFamily: 'Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif' }}>Travel Desk</h1>
+            </div>
+          </Link>
+          <div className="flex items-center gap-3 flex-wrap">
+            <Link to="/dashboard" className="text-sm font-bold text-slate-400 hover:text-white transition-all uppercase tracking-[0.22em] flex items-center gap-2 rounded-full border border-white/10 px-4 py-2"><LayoutDashboard size={18}/> Board</Link>
+            <Link to="/new" className="text-sm font-bold text-slate-400 hover:text-white transition-all uppercase tracking-[0.22em] flex items-center gap-2 rounded-full border border-white/10 px-4 py-2"><PlusCircle size={18}/> New</Link>
+            <div className="flex items-center gap-3 ml-2 rounded-full border border-white/10 bg-white/5 px-4 py-2">
+              <span className="text-[10px] font-black text-cyan-200 uppercase tracking-[0.28em]">{user.role === 'admin' ? 'Admin' : 'Employee'}</span>
+              <span className="text-sm text-white">{user.name}</span>
+              <button onClick={() => void logout()} className="text-slate-500 hover:text-rose-300 transition-colors"><LogOut size={18} /></button>
+            </div>
+          </div>
+        </nav>
+
+        <Routes>
+          <Route path="/dashboard" element={<Dashboard user={user} />} />
+          <Route path="/new" element={<TravelForm user={user} />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </div>
+    </div>
+  );
+}
+
+function AppContent() {
+  const { user, loading, refreshUser, logout } = useAuth();
+
+  return (
+    <Routes>
+      <Route
+        path="/"
+        element={
+          loading
+            ? <div className="min-h-screen bg-[#06101d]" />
+            : user
+              ? <Navigate to="/dashboard" replace />
+              : <LandingPage />
+        }
+      />
+      <Route path="/auth/callback" element={<AuthCallbackPage refreshUser={refreshUser} />} />
+      <Route
+        path="/*"
+        element={
+          <ProtectedRoute user={user} loading={loading}>
+            {user ? <AppShell user={user} logout={logout} /> : null}
+          </ProtectedRoute>
+        }
+      />
+    </Routes>
   );
 }
 

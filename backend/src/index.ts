@@ -64,6 +64,19 @@ const approvalStatuses = [
   'Not Approved',
 ];
 
+const normalizeRequestStatus = (status?: string | null) => {
+  switch (status) {
+    case 'Pending':
+      return 'Awaiting Response';
+    case 'Need More Info':
+      return 'Need More Information';
+    case 'Rejected':
+      return 'Not Approved';
+    default:
+      return status || 'Awaiting Response';
+  }
+};
+
 const ensureSchema = async () => {
   const sql = fs.readFileSync(schemaPath, 'utf8');
   await query(sql);
@@ -185,6 +198,7 @@ const hydrateRequests = async (rows: any[]) => {
 
   return rows.map((row) => ({
     ...row,
+    status: normalizeRequestStatus(row.status),
     days: daysByRequest[row.id] || [],
   }));
 };
@@ -445,6 +459,10 @@ app.post('/api/requests', requireAuth, requireSubmitter, async (req: Authenticat
   } = req.body;
 
   try {
+    if (!traveler_name || !traveler_email || !event_id || !department || !cost_center || !budget || !start_date || !end_date) {
+      return res.status(400).json({ error: 'Missing required request fields' });
+    }
+
     const eventResult = await query(
       `SELECT id, name, location, event_status, start_date, end_date FROM events WHERE id = $1`,
       [event_id]
@@ -462,13 +480,16 @@ app.post('/api/requests', requireAuth, requireSubmitter, async (req: Authenticat
 
     const travelerUser = travelerLookup.rows[0] || null;
     const scheduleDays = buildRequestDays(start_date, end_date, days);
+    if (scheduleDays.length === 0) {
+      return res.status(400).json({ error: 'Travel dates must include at least one day' });
+    }
 
     const result = await query(
       `INSERT INTO travel_requests (
          requester_id, traveler_user_id, traveler_name, traveler_email, event_id, event_name,
-         event_location, department, cost_center, budget, data_status, notes, start_date, end_date, total_days
+         event_location, department, cost_center, budget, data_status, notes, start_date, end_date, total_days, status
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING *`,
       [
         req.user!.id,
@@ -486,6 +507,7 @@ app.post('/api/requests', requireAuth, requireSubmitter, async (req: Authenticat
         start_date,
         end_date,
         scheduleDays.length,
+        'Awaiting Response',
       ]
     );
 
@@ -501,18 +523,26 @@ app.post('/api/requests', requireAuth, requireSubmitter, async (req: Authenticat
       )
     );
 
-    await notifyNewRequest({
-      requesterName: req.user!.name,
-      requesterEmail: req.user!.email,
-      travelerName: traveler_name,
-      travelerEmail: traveler_email || null,
-      eventName: event.name,
-    });
+    try {
+      await notifyNewRequest({
+        requesterName: req.user!.name,
+        requesterEmail: req.user!.email,
+        travelerName: traveler_name,
+        travelerEmail: traveler_email || null,
+        eventName: event.name,
+      });
+    } catch (notificationError) {
+      console.error('Failed to send new request notification', notificationError);
+    }
 
     res.status(201).json(newRequest);
   } catch (error: any) {
     console.error(error);
-    res.status(500).json({ error: 'Failed to save request' });
+    const message =
+      process.env.NODE_ENV === 'development'
+        ? error?.message || error?.detail || 'Failed to save request'
+        : 'Failed to save request';
+    res.status(500).json({ error: message });
   }
 });
 

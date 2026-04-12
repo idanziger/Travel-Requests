@@ -5,7 +5,9 @@ import fs from 'fs';
 
 dotenv.config({ path: '../.env' });
 
-const KEY_FILE = path.join(__dirname, '../service-account.json');
+const KEY_FILE = process.env.GOOGLE_SERVICE_ACCOUNT_FILE
+  ? path.resolve(process.env.GOOGLE_SERVICE_ACCOUNT_FILE)
+  : path.join(__dirname, '../service-account.json');
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const AUTH_MODE = process.env.AUTH_MODE || 'google-groups';
 const ADMIN_GROUP = process.env.ADMIN_GROUP_EMAIL || 'travel-app-admins@ssvlabs.io';
@@ -30,6 +32,35 @@ const coordinatorAllowlist = parseEmailList(
 const managerAllowlist = parseEmailList(process.env.MANAGER_OVERRIDE_EMAILS || process.env.ALLOWED_MANAGER_EMAILS);
 const employeeAllowlist = parseEmailList(process.env.ALLOWED_EMPLOYEE_EMAILS);
 
+type ServiceAccountCredentials = {
+  client_email: string;
+  private_key: string;
+};
+
+let cachedCredentials: ServiceAccountCredentials | null = null;
+
+const getServiceAccountCredentials = (): ServiceAccountCredentials => {
+  if (cachedCredentials) {
+    return cachedCredentials;
+  }
+
+  if (!fs.existsSync(KEY_FILE)) {
+    throw new Error(`Google service account file not found at ${KEY_FILE}`);
+  }
+
+  const raw = JSON.parse(fs.readFileSync(KEY_FILE, 'utf8')) as Partial<ServiceAccountCredentials>;
+  if (!raw.client_email || !raw.private_key) {
+    throw new Error('Google service account file is missing client_email or private_key');
+  }
+
+  cachedCredentials = {
+    client_email: raw.client_email,
+    private_key: raw.private_key,
+  };
+
+  return cachedCredentials;
+};
+
 const createDirectoryClient = (
   scopes: string[] = ['https://www.googleapis.com/auth/admin.directory.group.member.readonly']
 ) => {
@@ -37,8 +68,10 @@ const createDirectoryClient = (
     throw new Error('ADMIN_EMAIL is not configured');
   }
 
+  const credentials = getServiceAccountCredentials();
   const auth = new google.auth.JWT({
-    keyFile: KEY_FILE,
+    email: credentials.client_email,
+    key: credentials.private_key,
     scopes,
     subject: ADMIN_EMAIL,
   });
@@ -161,7 +194,7 @@ export const debugGroupMembership = async (email: string) => {
     adminMember,
     userMember,
     allowlistRole,
-    resolvedRole: adminMember ? 'admin' : userMember ? 'employee' : allowlistRole,
+    resolvedRole: adminMember ? 'admin' : userMember ? 'manager' : allowlistRole,
   };
 };
 
@@ -212,7 +245,11 @@ export const searchDirectoryUsers = async (term: string) => {
 
     return users.slice(0, 20);
   } catch (error: any) {
-    console.error('GOOGLE API ERROR:', error.message || error);
+    console.error(
+      'GOOGLE API ERROR:',
+      error.message || error,
+      error.response?.data?.error_description || ''
+    );
     return [];
   }
 };

@@ -67,6 +67,7 @@ ALTER TABLE travel_requests ADD COLUMN IF NOT EXISTS data_status TEXT;
 ALTER TABLE travel_requests ADD COLUMN IF NOT EXISTS approver_notes TEXT;
 ALTER TABLE travel_requests ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE travel_requests ADD COLUMN IF NOT EXISTS total_days INTEGER;
+ALTER TABLE travel_requests ALTER COLUMN status SET DEFAULT 'Awaiting Response';
 
 DO $$
 BEGIN
@@ -78,8 +79,19 @@ BEGIN
         UPDATE travel_requests
         SET cost_center = COALESCE(cost_center, budget_code)
         WHERE budget_code IS NOT NULL;
+
+        EXECUTE 'ALTER TABLE travel_requests ALTER COLUMN budget_code DROP NOT NULL';
     END IF;
 END $$;
+
+UPDATE travel_requests
+SET status = CASE
+    WHEN status = 'Pending' THEN 'Awaiting Response'
+    WHEN status = 'Need More Info' THEN 'Need More Information'
+    WHEN status = 'Rejected' THEN 'Not Approved'
+    ELSE status
+END
+WHERE status IN ('Pending', 'Need More Info', 'Rejected');
 
 CREATE TABLE IF NOT EXISTS request_days (
     id SERIAL PRIMARY KEY,

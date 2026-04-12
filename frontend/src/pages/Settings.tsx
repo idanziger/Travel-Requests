@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Save, Trash2, PlusCircle } from 'lucide-react';
+import { Save, Trash2, PlusCircle, Calendar } from 'lucide-react';
 import type { EventItem, OptionItem } from '../types';
 
 type ConfigPayload = {
@@ -92,8 +92,14 @@ function Settings() {
               <input value={event.name} onChange={(e) => setConfig((current) => current ? ({ ...current, events: current.events.map((item) => item.id === event.id ? { ...item, name: e.target.value } : item) }) : current)} className="rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
               <input value={event.location} onChange={(e) => setConfig((current) => current ? ({ ...current, events: current.events.map((item) => item.id === event.id ? { ...item, location: e.target.value } : item) }) : current)} className="rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
               <input value={event.event_status || ''} onChange={(e) => setConfig((current) => current ? ({ ...current, events: current.events.map((item) => item.id === event.id ? { ...item, event_status: e.target.value } : item) }) : current)} className="rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
-              <input type="date" value={event.start_date || ''} onChange={(e) => setConfig((current) => current ? ({ ...current, events: current.events.map((item) => item.id === event.id ? { ...item, start_date: e.target.value } : item) }) : current)} className="rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
-              <input type="date" value={event.end_date || ''} onChange={(e) => setConfig((current) => current ? ({ ...current, events: current.events.map((item) => item.id === event.id ? { ...item, end_date: e.target.value } : item) }) : current)} className="rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
+              <div className="date-input-wrap">
+                <input type="date" value={event.start_date || ''} onChange={(e) => setConfig((current) => current ? ({ ...current, events: current.events.map((item) => item.id === event.id ? { ...item, start_date: e.target.value } : item) }) : current)} className="date-input rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
+                <Calendar size={16} className="date-input-icon" />
+              </div>
+              <div className="date-input-wrap">
+                <input type="date" value={event.end_date || ''} onChange={(e) => setConfig((current) => current ? ({ ...current, events: current.events.map((item) => item.id === event.id ? { ...item, end_date: e.target.value } : item) }) : current)} className="date-input rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
+                <Calendar size={16} className="date-input-icon" />
+              </div>
               <div className="flex gap-2">
                 <button onClick={() => void saveEvent(event)} className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-3 text-cyan-200"><Save size={16} /></button>
                 <button onClick={() => void archiveEvent(event.id)} className="rounded-2xl border border-rose-300/20 bg-rose-300/10 p-3 text-rose-200"><Trash2 size={16} /></button>
@@ -104,8 +110,14 @@ function Settings() {
             <input value={newEvent.name} onChange={(e) => setNewEvent((current) => ({ ...current, name: e.target.value }))} placeholder="New event name" className="rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
             <input value={newEvent.location} onChange={(e) => setNewEvent((current) => ({ ...current, location: e.target.value }))} placeholder="Location" className="rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
             <input value={newEvent.event_status} onChange={(e) => setNewEvent((current) => ({ ...current, event_status: e.target.value }))} placeholder="Status" className="rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
-            <input type="date" value={newEvent.start_date} onChange={(e) => setNewEvent((current) => ({ ...current, start_date: e.target.value }))} className="rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
-            <input type="date" value={newEvent.end_date} onChange={(e) => setNewEvent((current) => ({ ...current, end_date: e.target.value }))} className="rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
+            <div className="date-input-wrap">
+              <input type="date" value={newEvent.start_date} onChange={(e) => setNewEvent((current) => ({ ...current, start_date: e.target.value }))} className="date-input rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
+              <Calendar size={16} className="date-input-icon" />
+            </div>
+            <div className="date-input-wrap">
+              <input type="date" value={newEvent.end_date} onChange={(e) => setNewEvent((current) => ({ ...current, end_date: e.target.value }))} className="date-input rounded-2xl border border-white/10 bg-[#0f1729] px-4 py-3 text-white outline-none" />
+              <Calendar size={16} className="date-input-icon" />
+            </div>
             <button onClick={() => void createEvent()} className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-3 text-cyan-200"><PlusCircle size={16} /></button>
           </div>
         </div>

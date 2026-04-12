@@ -32,6 +32,47 @@ textarea {
   font: inherit;
 }
 
+input[type="date"] {
+  color-scheme: dark;
+  background-color: #08101d;
+}
+
+.date-input-wrap {
+  position: relative;
+}
+
+.date-input {
+  padding-right: 3rem;
+}
+
+.date-input-icon {
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #ffffff;
+  pointer-events: none;
+  opacity: 0.92;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(2.4) contrast(1.4);
+  opacity: 1;
+  cursor: pointer;
+  position: absolute;
+  right: 0.75rem;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+input[type="date"]::-webkit-datetime-edit,
+input[type="date"]::-webkit-datetime-edit-text,
+input[type="date"]::-webkit-datetime-edit-month-field,
+input[type="date"]::-webkit-datetime-edit-day-field,
+input[type="date"]::-webkit-datetime-edit-year-field {
+  color: #ffffff;
+}
+
 #root {
   min-height: 100vh;
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { AlertCircle, CalendarDays, CheckCircle2, Search, Sparkles } from 'lucide-react';
+import { AlertCircle, Calendar, CalendarDays, CheckCircle2, Search, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import type { AuthUser, EventItem, OptionItem, RequestDay } from '../types';
 
@@ -64,7 +64,6 @@ function NewRequest({ user }: { user: AuthUser }) {
     department: '',
     cost_center: '',
     budget: '',
-    data_status: 'waiting',
     notes: '',
     start_date: '',
     end_date: '',
@@ -250,7 +249,6 @@ function NewRequest({ user }: { user: AuthUser }) {
               { key: 'department', label: 'Department', category: 'department' },
               { key: 'cost_center', label: 'Cost Center', category: 'cost_center' },
               { key: 'budget', label: 'Budget', category: 'budget' },
-              { key: 'data_status', label: 'Status of Data', category: 'data_status' },
             ].map((field) => (
               <div key={field.key} className="space-y-2">
                 <label className="text-[11px] font-bold uppercase text-slate-400">{field.label} *</label>
@@ -280,23 +278,29 @@ function NewRequest({ user }: { user: AuthUser }) {
           <div className="grid gap-6 md:grid-cols-2">
             <div className="space-y-2">
               <label className="text-[11px] font-bold uppercase text-slate-400">Start Date *</label>
-              <input
-                required
-                type="date"
-                value={formData.start_date}
-                onChange={(e) => setFormData((current) => ({ ...current, start_date: e.target.value }))}
-                className="w-full rounded-2xl border border-white/10 bg-[#08101d] px-4 py-3 text-white outline-none focus:border-cyan-400"
-              />
+              <div className="date-input-wrap">
+                <input
+                  required
+                  type="date"
+                  value={formData.start_date}
+                  onChange={(e) => setFormData((current) => ({ ...current, start_date: e.target.value }))}
+                  className="date-input w-full rounded-2xl border border-white/10 bg-[#08101d] px-4 py-3 text-white outline-none focus:border-cyan-400"
+                />
+                <Calendar size={16} className="date-input-icon" />
+              </div>
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold uppercase text-slate-400">End Date *</label>
-              <input
-                required
-                type="date"
-                value={formData.end_date}
-                onChange={(e) => setFormData((current) => ({ ...current, end_date: e.target.value }))}
-                className="w-full rounded-2xl border border-white/10 bg-[#08101d] px-4 py-3 text-white outline-none focus:border-cyan-400"
-              />
+              <div className="date-input-wrap">
+                <input
+                  required
+                  type="date"
+                  value={formData.end_date}
+                  onChange={(e) => setFormData((current) => ({ ...current, end_date: e.target.value }))}
+                  className="date-input w-full rounded-2xl border border-white/10 bg-[#08101d] px-4 py-3 text-white outline-none focus:border-cyan-400"
+                />
+                <Calendar size={16} className="date-input-icon" />
+              </div>
             </div>
           </div>
         </section>

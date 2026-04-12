@@ -10,6 +10,7 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const AUTH_MODE = process.env.AUTH_MODE || 'google-groups';
 const ADMIN_GROUP = process.env.ADMIN_GROUP_EMAIL || 'travel-app-admins@ssvlabs.io';
 const USER_GROUP = process.env.USER_GROUP_EMAIL || 'travel-app-user@ssvlabs.io';
+const allowedDomain = (process.env.ALLOWED_EMAIL_DOMAIN || 'ssvlabs.io').toLowerCase();
 
 const parseEmailList = (value?: string) =>
   new Set(
@@ -19,17 +20,26 @@ const parseEmailList = (value?: string) =>
       .filter(Boolean)
   );
 
-const managerAllowlist = parseEmailList(process.env.ALLOWED_MANAGER_EMAILS);
+const adminAllowlist = parseEmailList(
+  process.env.ADMIN_OVERRIDE_EMAILS ||
+    'yoav@ssvlabs.io,alon@ssvlabs.io,keren@ssvlabs.io,ilan@ssvlabs.io,ijd_admin@ssvlabs.io'
+);
+const coordinatorAllowlist = parseEmailList(
+  process.env.COORDINATOR_EMAILS || 'tamar@ssvlabs.io'
+);
+const managerAllowlist = parseEmailList(process.env.MANAGER_OVERRIDE_EMAILS || process.env.ALLOWED_MANAGER_EMAILS);
 const employeeAllowlist = parseEmailList(process.env.ALLOWED_EMPLOYEE_EMAILS);
 
-const createDirectoryClient = () => {
+const createDirectoryClient = (
+  scopes: string[] = ['https://www.googleapis.com/auth/admin.directory.group.member.readonly']
+) => {
   if (!ADMIN_EMAIL) {
     throw new Error('ADMIN_EMAIL is not configured');
   }
 
   const auth = new google.auth.JWT({
     keyFile: KEY_FILE,
-    scopes: ['https://www.googleapis.com/auth/admin.directory.group.member.readonly'],
+    scopes,
     subject: ADMIN_EMAIL,
   });
 
@@ -39,11 +49,23 @@ const createDirectoryClient = () => {
 const getAllowlistedRole = (email: string) => {
   const normalizedEmail = email.toLowerCase();
 
-  if (managerAllowlist.has(normalizedEmail)) {
+  if (adminAllowlist.has(normalizedEmail)) {
     return 'admin';
   }
 
+  if (coordinatorAllowlist.has(normalizedEmail)) {
+    return 'coordinator';
+  }
+
+  if (managerAllowlist.has(normalizedEmail)) {
+    return 'manager';
+  }
+
   if (employeeAllowlist.has(normalizedEmail)) {
+    return 'employee';
+  }
+
+  if (normalizedEmail.endsWith(`@${allowedDomain}`)) {
     return 'employee';
   }
 
@@ -85,7 +107,7 @@ export const getUserRoleFromGroups = async (email: string) => {
   if (isAdmin) return 'admin';
 
   const isUser = await checkGroupMembership(email, USER_GROUP);
-  if (isUser) return 'employee';
+  if (isUser) return 'manager';
 
   return getAllowlistedRole(email);
 };
@@ -151,4 +173,46 @@ export const debugListGroupMembers = async (groupEmail: string) => {
     count: members.length,
     members,
   };
+};
+
+export const searchDirectoryUsers = async (term: string) => {
+  const normalizedTerm = term.trim().toLowerCase();
+
+  try {
+    if (!canUseGoogleGroups()) {
+      return [];
+    }
+
+    const admin = createDirectoryClient([
+      'https://www.googleapis.com/auth/admin.directory.user.readonly',
+    ]);
+
+    const response = await admin.users.list({
+      customer: 'my_customer',
+      maxResults: 200,
+      orderBy: 'email',
+    });
+
+    const users =
+      response.data.users
+        ?.filter((user) => {
+          const email = user.primaryEmail?.toLowerCase() || '';
+          const fullName = user.name?.fullName?.toLowerCase() || '';
+
+          return (
+            email.endsWith(`@${allowedDomain}`) &&
+            (email.includes(normalizedTerm) || fullName.includes(normalizedTerm))
+          );
+        })
+        .map((user) => ({
+          email: user.primaryEmail || '',
+          name: user.name?.fullName || user.primaryEmail || '',
+        }))
+        .filter((user) => Boolean(user.email)) || [];
+
+    return users.slice(0, 20);
+  } catch (error: any) {
+    console.error('GOOGLE API ERROR:', error.message || error);
+    return [];
+  }
 };

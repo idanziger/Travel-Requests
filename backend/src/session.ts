@@ -12,7 +12,7 @@ const SESSION_TTL_SECONDS = Number(process.env.SESSION_TTL_SECONDS || 60 * 60 * 
 const isSecureCookie =
   process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
 
-type SessionRole = 'employee' | 'admin';
+export type SessionRole = 'employee' | 'manager' | 'coordinator' | 'admin';
 
 export interface SessionUser {
   id: number;
@@ -163,6 +163,22 @@ export const requireAdmin = (
 
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
+  }
+
+  next();
+};
+
+export const requireSubmitter = (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  if (!['admin', 'manager', 'coordinator'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Submission access required' });
   }
 
   next();

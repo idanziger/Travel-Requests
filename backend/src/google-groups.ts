@@ -220,10 +220,18 @@ export const searchDirectoryUsers = async (term: string) => {
       'https://www.googleapis.com/auth/admin.directory.user.readonly',
     ]);
 
+    const escapedTerm = normalizedTerm.replace(/'/g, "\\'");
+    const query =
+      normalizedTerm.includes('@')
+        ? `email:${escapedTerm}*`
+        : escapedTerm;
+
     const response = await admin.users.list({
       customer: 'my_customer',
-      maxResults: 200,
+      query,
+      maxResults: 20,
       orderBy: 'email',
+      viewType: 'admin_view',
     });
 
     const users =

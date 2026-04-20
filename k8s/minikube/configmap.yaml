@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: travel-requests-config
+  namespace: travel-requests
+data:
+  PORT: "3001"
+  NODE_ENV: "production"
+  AUTH_MODE: "email-allowlist"
+  ALLOWED_EMAIL_DOMAIN: "ssvlabs.io"
+  ADMIN_EMAIL: "ijd_admin@ssvlabs.io"
+  ADMIN_GROUP_EMAIL: "travel-app-admins@ssvlabs.io"
+  USER_GROUP_EMAIL: "travel-app-user@ssvlabs.io"
+  COORDINATOR_EMAILS: "tamar@ssvlabs.io"
+  PRIMARY_APPROVER_EMAILS: "yoav@ssvlabs.io"
+  NOTIFY_ALL_EMAILS: "tamar@ssvlabs.io"
+  APPROVER_EMAIL: "yoav@ssvlabs.io"
+  FRONTEND_URL: "http://travel-requests.local"
+  GOOGLE_CALLBACK_URL: "http://travel-requests.local/auth/google/callback"
+  GOOGLE_SERVICE_ACCOUNT_FILE: "/var/run/secrets/travel-desk/service-account.json"
+  AUTH_COOKIE_NAME: "travel_requests_session"
+  SESSION_TTL_SECONDS: "28800"
+  COOKIE_SECURE: "false"

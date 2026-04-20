@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: travel-requests-backend
+  namespace: travel-requests
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: travel-requests-backend
+  template:
+    metadata:
+      labels:
+        app: travel-requests-backend
+    spec:
+      containers:
+        - name: backend
+          image: travel-requests-backend:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3001
+          envFrom:
+            - configMapRef:
+                name: travel-requests-config
+            - secretRef:
+                name: travel-requests-secrets
+          volumeMounts:
+            - name: service-account
+              mountPath: /var/run/secrets/travel-desk
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 20
+            periodSeconds: 10
+      volumes:
+        - name: service-account
+          secret:
+            secretName: travel-requests-service-account
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: travel-requests-backend
+  namespace: travel-requests
+spec:
+  selector:
+    app: travel-requests-backend
+  ports:
+    - port: 3001
+      targetPort: 3001

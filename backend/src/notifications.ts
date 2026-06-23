@@ -1,11 +1,14 @@
 import { google } from 'googleapis';
 import dotenv from 'dotenv';
+import { getDelegatedAccessToken } from './google-dwd';
 
 dotenv.config({ path: '../.env' });
 
 const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-const notificationFromEmail = process.env.NOTIFICATION_FROM_EMAIL;
+const GMAIL_SENDER = process.env.GMAIL_SENDER?.trim() || 'travel@ssvlabs.io';
+const notificationFromEmail = process.env.NOTIFICATION_FROM_EMAIL?.trim() || GMAIL_SENDER;
 const senderName = process.env.NOTIFICATION_SENDER_NAME || 'SSV Labs Travel Desk';
+const GMAIL_SEND_SCOPES = ['https://www.googleapis.com/auth/gmail.send'];
 
 const parseEmailList = (value?: string) =>
   (value || '')
@@ -14,9 +17,8 @@ const parseEmailList = (value?: string) =>
     .filter(Boolean);
 
 const primaryApprovers = parseEmailList(
-  process.env.PRIMARY_APPROVER_EMAILS || 'yoav@ssvlabs.io'
+  process.env.PRIMARY_APPROVER_EMAILS || 'travel-app-admins@ssvlabs.io'
 );
-const watchers = parseEmailList(process.env.NOTIFY_ALL_EMAILS || 'tamar@ssvlabs.io');
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
@@ -35,22 +37,34 @@ const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 const uniqueRecipients = (recipients: string[]) => [...new Set(recipients.filter(Boolean))];
 
 export const sendNotification = async (to: string | string[], subject: string, html: string) => {
-  if (!process.env.GOOGLE_REFRESH_TOKEN) {
-    console.log('Skipping email: No GOOGLE_REFRESH_TOKEN in .env');
-    return;
-  }
-
   try {
+    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
+    const hasRefreshToken = Boolean(refreshToken);
+    const hasDwdSender = Boolean(GMAIL_SENDER);
+    if (!hasRefreshToken && !hasDwdSender) {
+      console.log('Skipping email: No GOOGLE_REFRESH_TOKEN or DWD Gmail sender configured');
+      return;
+    }
+
     const recipients = uniqueRecipients(Array.isArray(to) ? to : [to]);
     if (recipients.length === 0) {
       console.log('Skipping email: No recipients resolved');
       return;
     }
 
+    if (refreshToken) {
+      oauth2Client.setCredentials({
+        refresh_token: refreshToken,
+      });
+    } else {
+      const accessToken = await getDelegatedAccessToken(GMAIL_SENDER, GMAIL_SEND_SCOPES);
+      oauth2Client.setCredentials({ access_token: accessToken });
+    }
+
     const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
     const messageParts = [
       `To: ${recipients.join(', ')}`,
-      ...(notificationFromEmail ? [`From: ${senderName} <${notificationFromEmail}>`] : []),
+      `From: ${senderName} <${notificationFromEmail}>`,
       'Content-Type: text/html; charset=utf-8',
       'MIME-Version: 1.0',
       `Subject: ${utf8Subject}`,
@@ -80,12 +94,7 @@ export const notifyNewRequest = async (params: {
   travelerEmail?: string | null;
   eventName: string;
 }) => {
-  const recipients = uniqueRecipients([
-    ...primaryApprovers,
-    ...watchers,
-    params.requesterEmail,
-    params.travelerEmail || '',
-  ]);
+  const recipients = uniqueRecipients(primaryApprovers);
 
   const html = `
     <div style="font-family: sans-serif; padding: 20px; color: #333;">
@@ -111,8 +120,6 @@ export const notifyStatusChange = async (params: {
   eventName: string;
 }) => {
   const recipients = uniqueRecipients([
-    ...primaryApprovers,
-    ...watchers,
     params.requesterEmail,
     params.travelerEmail || '',
   ]);

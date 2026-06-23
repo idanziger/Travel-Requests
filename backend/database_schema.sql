@@ -84,15 +84,6 @@ BEGIN
     END IF;
 END $$;
 
-UPDATE travel_requests
-SET status = CASE
-    WHEN status = 'Pending' THEN 'Awaiting Response'
-    WHEN status = 'Need More Info' THEN 'Need More Information'
-    WHEN status = 'Rejected' THEN 'Not Approved'
-    ELSE status
-END
-WHERE status IN ('Pending', 'Need More Info', 'Rejected');
-
 CREATE TABLE IF NOT EXISTS request_days (
     id SERIAL PRIMARY KEY,
     request_id INTEGER NOT NULL REFERENCES travel_requests(id) ON DELETE CASCADE,

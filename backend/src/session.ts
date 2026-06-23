@@ -58,57 +58,75 @@ export const signSessionToken = (user: SessionUser) => {
 };
 
 export const verifySessionToken = (token: string): SessionUser | null => {
-  const [header, payload, signature] = token.split('.');
-  if (!header || !payload || !signature) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return null;
+    }
+
+    const [header, payload, signature] = parts;
+    if (!header || !payload || !signature) {
+      return null;
+    }
+
+    const expectedSignature = encodeBase64Url(
+      crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${payload}`).digest()
+    );
+    const signatureBuffer = Buffer.from(signature);
+    const expectedSignatureBuffer = Buffer.from(expectedSignature);
+
+    if (
+      signatureBuffer.length !== expectedSignatureBuffer.length ||
+      !crypto.timingSafeEqual(signatureBuffer, expectedSignatureBuffer)
+    ) {
+      return null;
+    }
+
+    const parsedPayload = JSON.parse(decodeBase64Url(payload)) as {
+      sub: string;
+      email: string;
+      name: string;
+      role: SessionRole;
+      exp: number;
+    };
+
+    if (!parsedPayload.exp || parsedPayload.exp <= Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+
+    return {
+      id: Number(parsedPayload.sub),
+      email: parsedPayload.email,
+      name: parsedPayload.name,
+      role: parsedPayload.role,
+    };
+  } catch {
     return null;
   }
-
-  const expectedSignature = encodeBase64Url(
-    crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${payload}`).digest()
-  );
-
-  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
-    return null;
-  }
-
-  const parsedPayload = JSON.parse(decodeBase64Url(payload)) as {
-    sub: string;
-    email: string;
-    name: string;
-    role: SessionRole;
-    exp: number;
-  };
-
-  if (!parsedPayload.exp || parsedPayload.exp <= Math.floor(Date.now() / 1000)) {
-    return null;
-  }
-
-  return {
-    id: Number(parsedPayload.sub),
-    email: parsedPayload.email,
-    name: parsedPayload.name,
-    role: parsedPayload.role,
-  };
 };
 
 const parseCookies = (cookieHeader?: string) => {
-  return Object.fromEntries(
-    (cookieHeader || '')
-      .split(';')
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-      .map((entry) => {
-        const separatorIndex = entry.indexOf('=');
-        if (separatorIndex === -1) {
-          return [entry, ''];
-        }
+  try {
+    return Object.fromEntries(
+      (cookieHeader || '')
+        .split(';')
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .map((entry) => {
+          const separatorIndex = entry.indexOf('=');
+          if (separatorIndex === -1) {
+            return [decodeURIComponent(entry), ''];
+          }
 
-        return [
-          decodeURIComponent(entry.slice(0, separatorIndex)),
-          decodeURIComponent(entry.slice(separatorIndex + 1)),
-        ];
-      })
-  );
+          return [
+            decodeURIComponent(entry.slice(0, separatorIndex)),
+            decodeURIComponent(entry.slice(separatorIndex + 1)),
+          ];
+        })
+    );
+  } catch {
+    return {};
+  }
 };
 
 export const setSessionCookie = (res: Response, token: string) => {
@@ -177,7 +195,7 @@ export const requireSubmitter = (
     return res.status(401).json({ error: 'Authentication required' });
   }
 
-  if (!['admin', 'manager', 'coordinator'].includes(req.user.role)) {
+  if (!['admin', 'manager'].includes(req.user.role)) {
     return res.status(403).json({ error: 'Submission access required' });
   }
 

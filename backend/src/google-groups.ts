@@ -2,6 +2,7 @@ import { google, admin_directory_v1 } from 'googleapis';
 import path from 'path';
 import dotenv from 'dotenv';
 import fs from 'fs';
+import { getDelegatedAccessToken } from './google-dwd';
 
 dotenv.config({ path: '../.env' });
 
@@ -24,10 +25,7 @@ const parseEmailList = (value?: string) =>
 
 const adminAllowlist = parseEmailList(
   process.env.ADMIN_OVERRIDE_EMAILS ||
-    'yoav@ssvlabs.io,alon@ssvlabs.io,keren@ssvlabs.io,ilan@ssvlabs.io,ijd_admin@ssvlabs.io'
-);
-const coordinatorAllowlist = parseEmailList(
-  process.env.COORDINATOR_EMAILS || 'tamar@ssvlabs.io'
+    'yoav@ssvlabs.io,alon@ssvlabs.io,keren@ssvlabs.io,ilan@ssvlabs.io,ijd_admin@ssvlabs.io,tamar@ssvlabs.io'
 );
 const managerAllowlist = parseEmailList(process.env.MANAGER_OVERRIDE_EMAILS || process.env.ALLOWED_MANAGER_EMAILS);
 const employeeAllowlist = parseEmailList(process.env.ALLOWED_EMPLOYEE_EMAILS);
@@ -61,20 +59,28 @@ const getServiceAccountCredentials = (): ServiceAccountCredentials => {
   return cachedCredentials;
 };
 
-const createDirectoryClient = (
+const createDirectoryClient = async (
   scopes: string[] = ['https://www.googleapis.com/auth/admin.directory.group.member.readonly']
 ) => {
   if (!ADMIN_EMAIL) {
     throw new Error('ADMIN_EMAIL is not configured');
   }
 
-  const credentials = getServiceAccountCredentials();
-  const auth = new google.auth.JWT({
-    email: credentials.client_email,
-    key: credentials.private_key,
-    scopes,
-    subject: ADMIN_EMAIL,
-  });
+  if (fs.existsSync(KEY_FILE)) {
+    const credentials = getServiceAccountCredentials();
+    const auth = new google.auth.JWT({
+      email: credentials.client_email,
+      key: credentials.private_key,
+      scopes,
+      subject: ADMIN_EMAIL,
+    });
+
+    return google.admin({ version: 'directory_v1', auth });
+  }
+
+  const auth = new google.auth.OAuth2();
+  const accessToken = await getDelegatedAccessToken(ADMIN_EMAIL, scopes);
+  auth.setCredentials({ access_token: accessToken });
 
   return google.admin({ version: 'directory_v1', auth });
 };
@@ -84,10 +90,6 @@ const getAllowlistedRole = (email: string) => {
 
   if (adminAllowlist.has(normalizedEmail)) {
     return 'admin';
-  }
-
-  if (coordinatorAllowlist.has(normalizedEmail)) {
-    return 'coordinator';
   }
 
   if (managerAllowlist.has(normalizedEmail)) {
@@ -106,12 +108,12 @@ const getAllowlistedRole = (email: string) => {
 };
 
 const canUseGoogleGroups = () => {
-  return Boolean(ADMIN_EMAIL && fs.existsSync(KEY_FILE));
+  return Boolean(ADMIN_EMAIL);
 };
 
 export const checkGroupMembership = async (userEmail: string, groupEmail: string): Promise<boolean> => {
   try {
-    const admin = createDirectoryClient();
+    const admin = await createDirectoryClient();
     
     const response = await admin.members.hasMember({
       groupKey: groupEmail,
@@ -151,7 +153,7 @@ export const getGroupMemberEmails = async (groupEmail: string): Promise<string[]
       return [];
     }
 
-    const admin = createDirectoryClient();
+    const admin = await createDirectoryClient();
     const members: string[] = [];
     let pageToken: string | undefined;
 
@@ -216,7 +218,7 @@ export const searchDirectoryUsers = async (term: string) => {
       return [];
     }
 
-    const admin = createDirectoryClient([
+    const admin = await createDirectoryClient([
       'https://www.googleapis.com/auth/admin.directory.user.readonly',
     ]);
 

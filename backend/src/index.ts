@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { getGoogleAuthUrl, getGoogleUser } from './auth';
-import { query } from './db';
+import pool, { query } from './db';
 import { notifyNewRequest, notifyStatusChange } from './notifications';
 import {
   debugGroupMembership,
@@ -25,14 +25,15 @@ import {
 dotenv.config({ path: '../.env' });
 
 const app = express();
+app.set('trust proxy', 1);
 const port = process.env.PORT || 3001;
-const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+const defaultFrontendOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+const configuredFrontendOrigins = process.env.FRONTEND_URL
+  ? process.env.FRONTEND_URL.split(',').map((origin) => origin.trim()).filter(Boolean)
+  : defaultFrontendOrigins;
+const frontendUrl = configuredFrontendOrigins[0] || defaultFrontendOrigins[0];
 const allowedEmailDomain = (process.env.ALLOWED_EMAIL_DOMAIN || 'ssvlabs.io').toLowerCase();
-const allowedOrigins = new Set(
-  [frontendUrl, process.env.FRONTEND_URL_ALT, 'http://localhost:5173', 'http://127.0.0.1:5173']
-    .filter(Boolean)
-    .map((origin) => origin as string)
-);
+const allowedOrigins = new Set(configuredFrontendOrigins);
 
 app.use(
   cors({
@@ -83,7 +84,7 @@ const ensureSchema = async () => {
 };
 
 const getRequestVisibilityClause = (user: NonNullable<AuthenticatedRequest['user']>) => {
-  if (['admin', 'coordinator'].includes(user.role)) {
+  if (user.role === 'admin') {
     return {
       sql: `SELECT r.*, 
               requester.name as requester_name,
@@ -105,11 +106,50 @@ const getRequestVisibilityClause = (user: NonNullable<AuthenticatedRequest['user
           FROM travel_requests r
           JOIN users requester ON r.requester_id = requester.id
           LEFT JOIN users traveler ON r.traveler_user_id = traveler.id
-          WHERE r.requester_id = $1 OR lower(coalesce(r.traveler_email, '')) = $2
+          WHERE r.requester_id = $1
+             OR r.traveler_user_id = $1
+             OR lower(coalesce(r.traveler_email, '')) = lower($2::text)
           ORDER BY r.submitted_at DESC`,
     params: [user.id, user.email.toLowerCase()],
   };
 };
+
+const parsePositiveIntegerParam = (value: string | string[] | undefined) => {
+  if (!value || Array.isArray(value) || !/^\d+$/.test(value)) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const dedupeRequestDaysByDate = (days: RequestDayInput[]) => {
+  const seenDates = new Set<string>();
+
+  return days
+    .filter((day) => {
+      const dateKey = String(day.day_date);
+      if (seenDates.has(dateKey)) {
+        return false;
+      }
+
+      seenDates.add(dateKey);
+      return true;
+    })
+    .map((day, index) => ({
+      ...day,
+      day_index: index + 1,
+    }));
+};
+
+const canViewRequestRow = (
+  user: NonNullable<AuthenticatedRequest['user']>,
+  row: { requester_id: number; traveler_user_id?: number | null; traveler_email?: string | null }
+) =>
+  user.role === 'admin' ||
+  row.requester_id === user.id ||
+  row.traveler_user_id === user.id ||
+  String(row.traveler_email || '').toLowerCase() === user.email.toLowerCase();
 
 const buildRequestDays = (startDate: string, endDate: string, suppliedDays?: RequestDayInput[]) => {
   if (Array.isArray(suppliedDays) && suppliedDays.length > 0) {
@@ -479,49 +519,61 @@ app.post('/api/requests', requireAuth, requireSubmitter, async (req: Authenticat
       : { rows: [] };
 
     const travelerUser = travelerLookup.rows[0] || null;
-    const scheduleDays = buildRequestDays(start_date, end_date, days);
+    const scheduleDays = dedupeRequestDaysByDate(buildRequestDays(start_date, end_date, days));
     if (scheduleDays.length === 0) {
       return res.status(400).json({ error: 'Travel dates must include at least one day' });
     }
 
-    const result = await query(
-      `INSERT INTO travel_requests (
-         requester_id, traveler_user_id, traveler_name, traveler_email, event_id, event_name,
-         event_location, department, cost_center, budget, data_status, notes, start_date, end_date, total_days, status
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-       RETURNING *`,
-      [
-        req.user!.id,
-        travelerUser?.id || null,
-        traveler_name,
-        traveler_email || null,
-        event.id,
-        event.name,
-        event.location,
-        department,
-        cost_center,
-        budget,
-        data_status || 'waiting',
-        notes || null,
-        start_date,
-        end_date,
-        scheduleDays.length,
-        'Awaiting Response',
-      ]
-    );
+    const client = await pool.connect();
+    let newRequest;
 
-    const newRequest = result.rows[0];
+    try {
+      await client.query('BEGIN');
 
-    await Promise.all(
-      scheduleDays.map((day) =>
-        query(
+      const result = await client.query(
+        `INSERT INTO travel_requests (
+           requester_id, traveler_user_id, traveler_name, traveler_email, event_id, event_name,
+           event_location, department, cost_center, budget, data_status, notes, start_date, end_date, total_days, status
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         RETURNING *`,
+        [
+          req.user!.id,
+          travelerUser?.id || null,
+          traveler_name,
+          traveler_email || null,
+          event.id,
+          event.name,
+          event.location,
+          department,
+          cost_center,
+          budget,
+          data_status || 'waiting',
+          notes || null,
+          start_date,
+          end_date,
+          scheduleDays.length,
+          'Awaiting Response',
+        ]
+      );
+
+      newRequest = result.rows[0];
+
+      for (const day of scheduleDays) {
+        await client.query(
           `INSERT INTO request_days (request_id, day_index, day_date, morning_role, evening_role)
            VALUES ($1, $2, $3, $4, $5)`,
           [newRequest.id, day.day_index, day.day_date, day.morning_role || null, day.evening_role || null]
-        )
-      )
-    );
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
 
     try {
       await notifyNewRequest({
@@ -558,11 +610,26 @@ app.get('/api/requests', requireAuth, async (req: AuthenticatedRequest, res) => 
 });
 
 app.patch('/api/requests/:id/status', requireAuth, async (req: AuthenticatedRequest, res) => {
+  const requestId = parsePositiveIntegerParam(req.params.id);
+  if (!requestId) {
+    return res.status(400).json({ error: 'Invalid request id' });
+  }
+
   if (!canActOnRequests(req.user!)) {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
   const { status, approver_notes } = req.body;
+  const hasStatus = Object.prototype.hasOwnProperty.call(req.body, 'status');
+  let nextStatus: string | undefined;
+
+  if (hasStatus) {
+    if (typeof status !== 'string' || !approvalStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    nextStatus = status;
+  }
 
   try {
     const details = await query(
@@ -570,7 +637,7 @@ app.patch('/api/requests/:id/status', requireAuth, async (req: AuthenticatedRequ
        FROM travel_requests r
        JOIN users requester ON r.requester_id = requester.id
        WHERE r.id = $1`,
-      [req.params.id]
+      [requestId]
     );
 
     if (details.rows.length === 0) {
@@ -578,7 +645,7 @@ app.patch('/api/requests/:id/status', requireAuth, async (req: AuthenticatedRequ
     }
 
     const existing = details.rows[0];
-    const finalStatus = status || existing.status;
+    const finalStatus = nextStatus || existing.status;
 
     const result = await query(
       `UPDATE travel_requests
@@ -586,10 +653,10 @@ app.patch('/api/requests/:id/status', requireAuth, async (req: AuthenticatedRequ
            approver_notes = $2
        WHERE id = $3
        RETURNING *`,
-      [finalStatus, approver_notes || null, req.params.id]
+      [finalStatus, approver_notes || null, requestId]
     );
 
-    if (status) {
+    if (nextStatus) {
       await notifyStatusChange({
         requesterEmail: existing.requester_email,
         travelerEmail: existing.traveler_email,
@@ -607,21 +674,22 @@ app.patch('/api/requests/:id/status', requireAuth, async (req: AuthenticatedRequ
 });
 
 app.get('/api/requests/:id/days', requireAuth, async (req: AuthenticatedRequest, res) => {
+  const requestId = parsePositiveIntegerParam(req.params.id);
+  if (!requestId) {
+    return res.status(400).json({ error: 'Invalid request id' });
+  }
+
   try {
     const requestResult = await query(
-      `SELECT requester_id, traveler_email FROM travel_requests WHERE id = $1`,
-      [req.params.id]
+      `SELECT requester_id, traveler_user_id, traveler_email FROM travel_requests WHERE id = $1`,
+      [requestId]
     );
     const row = requestResult.rows[0];
     if (!row) {
       return res.status(404).json({ error: 'Not found' });
     }
 
-    if (
-      !['admin', 'coordinator'].includes(req.user!.role) &&
-      row.requester_id !== req.user!.id &&
-      String(row.traveler_email || '').toLowerCase() !== req.user!.email.toLowerCase()
-    ) {
+    if (!canViewRequestRow(req.user!, row)) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -630,7 +698,7 @@ app.get('/api/requests/:id/days', requireAuth, async (req: AuthenticatedRequest,
        FROM request_days
        WHERE request_id = $1
        ORDER BY day_index ASC`,
-      [req.params.id]
+      [requestId]
     );
     res.json(result.rows);
   } catch (error) {
@@ -639,31 +707,39 @@ app.get('/api/requests/:id/days', requireAuth, async (req: AuthenticatedRequest,
 });
 
 app.patch('/api/requests/:id/days/:dayId', requireAuth, async (req: AuthenticatedRequest, res) => {
-  const requestResult = await query(
-    `SELECT requester_id FROM travel_requests WHERE id = $1`,
-    [req.params.id]
-  );
-  const requestRow = requestResult.rows[0];
+  const requestId = parsePositiveIntegerParam(req.params.id);
+  const dayId = parsePositiveIntegerParam(req.params.dayId);
 
-  if (!requestRow) {
-    return res.status(404).json({ error: 'Not found' });
+  if (!requestId) {
+    return res.status(400).json({ error: 'Invalid request id' });
   }
 
-  if (
-    !['admin', 'coordinator'].includes(req.user!.role) &&
-    requestRow.requester_id !== req.user!.id
-  ) {
-    return res.status(403).json({ error: 'Unauthorized' });
+  if (!dayId) {
+    return res.status(400).json({ error: 'Invalid day id' });
   }
 
   try {
+    const requestResult = await query(
+      `SELECT requester_id FROM travel_requests WHERE id = $1`,
+      [requestId]
+    );
+    const requestRow = requestResult.rows[0];
+
+    if (!requestRow) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    if (req.user!.role !== 'admin' && requestRow.requester_id !== req.user!.id) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
     const result = await query(
       `UPDATE request_days
        SET morning_role = $1,
            evening_role = $2
        WHERE id = $3 AND request_id = $4
        RETURNING *`,
-      [req.body.morning_role || null, req.body.evening_role || null, req.params.dayId, req.params.id]
+      [req.body.morning_role || null, req.body.evening_role || null, dayId, requestId]
     );
     res.json(result.rows[0]);
   } catch (error) {
@@ -695,6 +771,19 @@ app.get('/api/debug/group-members', async (req, res) => {
   }
 
   res.json(await debugListGroupMembers(group));
+});
+
+const publicPath = path.join(__dirname, '../public');
+const indexHtmlPath = path.join(publicPath, 'index.html');
+
+app.use(express.static(publicPath));
+
+app.use(/^\/(?:api|auth)(?:\/|$)/, (_req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+app.get(/.*/, (_req, res) => {
+  res.sendFile(indexHtmlPath);
 });
 
 ensureSchema()

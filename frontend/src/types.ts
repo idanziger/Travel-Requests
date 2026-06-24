@@ -2,7 +2,7 @@ export type AuthUser = {
   id: number;
   email: string;
   name: string;
-  role: 'employee' | 'manager' | 'coordinator' | 'admin';
+  role: 'employee' | 'manager' | 'admin';
 };
 
 export type OptionItem = {
@@ -33,6 +33,7 @@ export type RequestDay = {
 
 export type TravelRequest = {
   id: number;
+  event_id?: number;
   traveler_name: string;
   traveler_email?: string | null;
   event_name: string;

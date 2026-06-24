@@ -1,23 +1,143 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { CheckCircle, ChevronDown, ChevronRight, Info, RefreshCw, Save, XCircle } from 'lucide-react';
+import { CalendarDays, CheckCircle, ChevronDown, ChevronRight, Info, RefreshCw, Save, Search, XCircle } from 'lucide-react';
 import { format } from 'date-fns';
-import type { AuthUser, TravelRequest } from '../types';
+import type { AuthUser, RequestDay, TravelRequest } from '../types';
 
-const statusGroups = [
-  { name: 'Awaiting Response', status: 'Awaiting Response' },
-  { name: 'Need More Information', status: 'Need More Information' },
-  { name: 'Approved', status: 'Approved' },
-  { name: 'Not Approved', status: 'Not Approved' },
+type StatusKey = 'all' | 'awaiting' | 'needInfo' | 'approved' | 'notApproved';
+
+type StatusMeta = {
+  key: Exclude<StatusKey, 'all'>;
+  label: string;
+  backend: string;
+  bg: string;
+  fg: string;
+  dot: string;
+  border: string;
+};
+
+const statusMetas: StatusMeta[] = [
+  {
+    key: 'awaiting',
+    label: 'Awaiting Response',
+    backend: 'Awaiting Response',
+    bg: 'bg-[#E7F0F6]',
+    fg: 'text-[#2F6F99]',
+    dot: 'bg-[#2F6F99]',
+    border: 'border-[#C8DDEB]',
+  },
+  {
+    key: 'needInfo',
+    label: 'Need More Info',
+    backend: 'Need More Info',
+    bg: 'bg-[#F6EAD6]',
+    fg: 'text-[#B07A2E]',
+    dot: 'bg-[#D99A4E]',
+    border: 'border-[#EAD4AF]',
+  },
+  {
+    key: 'approved',
+    label: 'Approved',
+    backend: 'Approved',
+    bg: 'bg-[#E6F0E4]',
+    fg: 'text-[#4E7A52]',
+    dot: 'bg-[#6E9E72]',
+    border: 'border-[#CFDEC9]',
+  },
+  {
+    key: 'notApproved',
+    label: 'Not Approved',
+    backend: 'Not Approved',
+    bg: 'bg-[#F3E7E1]',
+    fg: 'text-[#A8694E]',
+    dot: 'bg-[#B0795C]',
+    border: 'border-[#E5D0C6]',
+  },
 ];
+
+const getStatusMeta = (status?: string | null) => {
+  const normalized = status || 'Awaiting Response';
+  return statusMetas.find((item) => item.backend === normalized) || statusMetas[0];
+};
+
+const filters: Array<{ key: StatusKey; label: string }> = [
+  { key: 'all', label: 'All' },
+  { key: 'awaiting', label: 'Awaiting' },
+  { key: 'needInfo', label: 'Need info' },
+  { key: 'approved', label: 'Approved' },
+  { key: 'notApproved', label: 'Not approved' },
+];
+
+const parseDate = (value?: string | null) => (value ? new Date(`${value.slice(0, 10)}T00:00:00`) : null);
+
+const formatDate = (value?: string | null, pattern = 'MMM d, yyyy') => {
+  const date = parseDate(value);
+  return date ? format(date, pattern) : 'Not set';
+};
+
+const requestSearchText = (request: TravelRequest) =>
+  [
+    request.traveler_name,
+    request.traveler_email,
+    request.requester_name,
+    request.requester_email,
+    request.event_name,
+    request.event_location,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+function StatusChip({ status }: { status?: string | null }) {
+  const meta = getStatusMeta(status);
+
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-pill border px-3 py-1 text-xs font-semibold ${meta.bg} ${meta.fg} ${meta.border}`}>
+      <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
+      {meta.label}
+    </span>
+  );
+}
+
+function DetailLine({ label, value }: { label: string; value?: string | number | null }) {
+  if (value === undefined || value === null || value === '') return null;
+
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-[rgba(44,40,31,.06)] py-2 last:border-b-0">
+      <span className="text-muted">{label}</span>
+      <span className="text-right font-medium text-ink">{value}</span>
+    </div>
+  );
+}
+
+function DayRow({ day }: { day: RequestDay }) {
+  return (
+    <div className="grid gap-3 rounded-field border border-[rgba(44,40,31,.08)] bg-white p-3 md:grid-cols-[.75fr_1fr_1fr]">
+      <div>
+        <p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-faint">Day {day.day_index}</p>
+        <p className="mt-1 font-semibold text-ink">{formatDate(day.day_date, 'EEE, MMM d')}</p>
+      </div>
+      <div>
+        <p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-faint">Morning</p>
+        <p className="mt-1 text-sm text-muted">{day.morning_role || 'No role'}</p>
+      </div>
+      <div>
+        <p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-faint">Evening</p>
+        <p className="mt-1 text-sm text-muted">{day.evening_role || 'No role'}</p>
+      </div>
+    </div>
+  );
+}
 
 function Dashboard({ user }: { user: AuthUser }) {
   const [requests, setRequests] = useState<TravelRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [editingNotes, setEditingNotes] = useState<Record<number, string>>({});
+  const [query, setQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState<StatusKey>('all');
 
-  const canAct = user.role === 'admin';
+  const canReview = user.role === 'admin';
 
   const fetchRequests = async () => {
     setLoading(true);
@@ -40,184 +160,276 @@ function Dashboard({ user }: { user: AuthUser }) {
     void fetchRequests();
   }, [user.id]);
 
-  const updateStatus = async (id: number, status: string) => {
-    await axios.patch(`/api/requests/${id}/status`, {
+  const updateStatus = async (request: TravelRequest, status: string) => {
+    await axios.patch(`/api/requests/${request.id}/status`, {
       status,
-      approver_notes: editingNotes[id],
+      approver_notes: editingNotes[request.id] || '',
     });
     await fetchRequests();
   };
 
-  const saveApproverNotes = async (id: number) => {
-    await axios.patch(`/api/requests/${id}/status`, {
-      approver_notes: editingNotes[id],
+  const saveApproverNotes = async (request: TravelRequest) => {
+    await axios.patch(`/api/requests/${request.id}/status`, {
+      status: request.status || 'Awaiting Response',
+      approver_notes: editingNotes[request.id] || '',
     });
     await fetchRequests();
   };
+
+  const searchedRequests = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return requests;
+
+    return requests.filter((request) => requestSearchText(request).includes(needle));
+  }, [query, requests]);
+
+  const groupedRequests = useMemo(
+    () =>
+      statusMetas.map((meta) => ({
+        meta,
+        rows: searchedRequests.filter((request) => getStatusMeta(request.status).key === meta.key),
+      })),
+    [searchedRequests]
+  );
+
+  const visibleGroups = activeFilter === 'all' ? groupedRequests : groupedRequests.filter((group) => group.meta.key === activeFilter);
+  const visibleCount = visibleGroups.reduce((sum, group) => sum + group.rows.length, 0);
+  const totalCount = requests.length;
 
   return (
-    <div className="w-full max-w-7xl space-y-8">
-      <div className="flex items-center justify-between gap-4">
+    <div className="mx-auto w-full max-w-7xl space-y-7">
+      <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <div className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-200/75">Live Queue</div>
-          <h1 className="text-3xl font-semibold text-white" style={{ fontFamily: 'Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif' }}>
-            Travel Board
+          <p className="eyebrow">{user.role === 'admin' ? 'All travel' : user.role === 'manager' ? 'My requests' : 'My travel'}</p>
+          <h1 className="font-display mt-2 text-5xl leading-none text-ink">
+            {user.role === 'admin' ? 'Travel requests' : user.role === 'manager' ? 'Where are we headed?' : 'My trips'}
           </h1>
         </div>
-        <button onClick={() => void fetchRequests()} className="flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-6 py-2.5 font-bold text-cyan-100">
-          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Refresh
+        <button
+          type="button"
+          onClick={() => void fetchRequests()}
+          className="inline-flex w-fit items-center gap-2 rounded-button border border-[rgba(44,40,31,.08)] bg-white px-4 py-2.5 text-sm font-semibold text-sky shadow-card transition duration-150 ease-window hover:border-[rgba(47,111,153,.26)] hover:bg-sky-tint"
+        >
+          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+          Refresh
         </button>
+      </header>
+
+      <section className="rounded-card border border-[rgba(44,40,31,.08)] bg-white/74 p-4 shadow-card backdrop-blur">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <label className="relative block flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-faint" size={17} />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search traveler, requester, event, or location"
+              className="field"
+              style={{ paddingLeft: '2.6rem' }}
+            />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {filters.map((filter) => {
+              const count =
+                filter.key === 'all'
+                  ? searchedRequests.length
+                  : groupedRequests.find((group) => group.meta.key === filter.key)?.rows.length || 0;
+              const active = activeFilter === filter.key;
+
+              return (
+                <button
+                  key={filter.key}
+                  type="button"
+                  onClick={() => setActiveFilter(filter.key)}
+                  className={`rounded-pill border px-4 py-2 text-sm font-semibold transition duration-150 ease-window ${
+                    active
+                      ? 'border-[rgba(47,111,153,.25)] bg-sky text-white'
+                      : 'border-[rgba(44,40,31,.08)] bg-shell text-muted hover:border-[rgba(47,111,153,.22)] hover:text-sky'
+                  }`}
+                >
+                  {filter.label}
+                  <span className={`ml-2 font-mono-ui text-[10px] ${active ? 'text-white/80' : 'text-faint'}`}>{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      <div className="flex items-center gap-2 text-sm text-muted">
+        <CalendarDays size={16} className="text-gold-deep" />
+        Showing {visibleCount} of {totalCount} request{totalCount === 1 ? '' : 's'}
       </div>
 
-      {statusGroups.map((group) => {
-        const rows = requests.filter((request) => (request.status || 'Awaiting Response') === group.status);
-        if (rows.length === 0 && group.status !== 'Awaiting Response') {
-          return null;
-        }
+      <div className="space-y-6">
+        {visibleGroups.map(({ meta, rows }) => {
+          if (rows.length === 0 && activeFilter === 'all') return null;
 
-        return (
-          <section key={group.status} className="space-y-4">
-            <h2 className="px-2 text-[10px] font-black uppercase tracking-[0.35em] text-slate-500">{group.name} ({rows.length})</h2>
-            <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#0f1729]/85 shadow-[0_40px_120px_rgba(7,12,28,0.45)]">
-              <table className="w-full text-left">
-                <thead className="border-b border-white/10 bg-[#09101f] text-[9px] uppercase text-slate-500">
-                  <tr>
-                    <th className="w-10 p-4"></th>
-                    <th className="px-6 py-4">Traveler</th>
-                    <th className="px-6 py-4">Requester</th>
-                    <th className="px-6 py-4">Event / Controls</th>
-                    <th className="px-6 py-4">Submitted</th>
-                    <th className="px-6 py-4 text-center">Status</th>
-                    {canAct && <th className="px-6 py-4 text-center">Actions</th>}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {rows.map((request) => (
-                    <React.Fragment key={request.id}>
-                      <tr className="hover:bg-white/3">
-                        <td className="p-4">
-                          <button onClick={() => setExpandedId((current) => current === request.id ? null : request.id)} className="text-slate-500 hover:text-white">
-                            {expandedId === request.id ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
-                          </button>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="font-bold text-white">{request.traveler_name}</div>
-                          <div className="text-[10px] text-slate-500">{request.traveler_email || 'No traveler email stored'}</div>
-                        </td>
-                        <td className="px-6 py-4 text-xs text-slate-400">
-                          <div>{request.requester_name || 'Unknown'}</div>
-                          <div className="mt-1 text-[10px] text-slate-500">{request.requester_email || ''}</div>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-slate-300">
-                          <div>{request.event_name}</div>
-                          <div className="mt-1 flex flex-wrap gap-2">
-                            {request.event_location && <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.24em] text-cyan-200">{request.event_location}</span>}
-                            {request.department && <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.24em] text-slate-300">{request.department}</span>}
-                            {request.cost_center && <span className="text-[10px] text-slate-500">{request.cost_center}</span>}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-xs text-slate-400">
-                          {request.submitted_at ? format(new Date(request.submitted_at), 'MMM d, yyyy') : request.request_date ? format(new Date(request.request_date), 'MMM d, yyyy') : '---'}
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <span className={`rounded-full border px-3 py-1 text-[9px] font-black uppercase tracking-[0.28em] ${
-                            request.status === 'Approved'
-                              ? 'border-emerald-400/20 bg-emerald-400/5 text-emerald-300'
-                              : request.status === 'Not Approved'
-                                ? 'border-rose-400/20 bg-rose-400/5 text-rose-300'
-                                : request.status === 'Need More Information'
-                                  ? 'border-amber-400/20 bg-amber-400/5 text-amber-300'
-                                  : 'border-cyan-300/20 bg-cyan-300/5 text-cyan-200'
-                          }`}>
-                            {request.status}
-                          </span>
-                        </td>
-                        {canAct && (
-                          <td className="px-6 py-4 text-center">
-                            <div className="flex justify-center gap-2">
-                              <button onClick={() => void updateStatus(request.id, 'Approved')} className="rounded border border-emerald-500/20 p-1 text-emerald-500 hover:bg-emerald-500 hover:text-white"><CheckCircle size={16} /></button>
-                              <button onClick={() => void updateStatus(request.id, 'Need More Information')} className="rounded border border-amber-500/20 p-1 text-amber-500 hover:bg-amber-500 hover:text-white"><Info size={16} /></button>
-                              <button onClick={() => void updateStatus(request.id, 'Not Approved')} className="rounded border border-rose-500/20 p-1 text-rose-500 hover:bg-rose-500 hover:text-white"><XCircle size={16} /></button>
-                            </div>
-                          </td>
-                        )}
-                      </tr>
-                      {expandedId === request.id && (
-                        <tr className="bg-[#09101f]/55">
-                          <td colSpan={canAct ? 7 : 6} className="p-8">
-                            <div className="grid gap-10 lg:grid-cols-[1.1fr_0.9fr]">
-                              <div className="space-y-6">
-                                <div>
-                                  <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.35em] text-slate-500">Daily Schedule</div>
-                                  <div className="space-y-3">
-                                    {request.days.map((day) => (
-                                      <div key={day.day_index} className="grid gap-3 rounded-2xl border border-white/10 bg-[#0f1729] p-4 md:grid-cols-[0.7fr_1fr_1fr]">
-                                        <div>
-                                          <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">Day {day.day_index}</div>
-                                          <div className="mt-2 text-white">{format(new Date(day.day_date), 'MMM d, yyyy')}</div>
-                                        </div>
-                                        <div>
-                                          <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">Morning</div>
-                                          <div className="mt-2 text-sm text-white">{day.morning_role || 'Not set'}</div>
-                                        </div>
-                                        <div>
-                                          <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">Evening</div>
-                                          <div className="mt-2 text-sm text-white">{day.evening_role || 'Not set'}</div>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                                <div className="rounded-2xl border border-white/10 bg-[#0f1729] p-4">
-                                  <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.35em] text-slate-500">Submitter Notes</div>
-                                  <div className="whitespace-pre-wrap text-sm text-slate-400">{request.notes || 'No submitter notes.'}</div>
-                                </div>
+          return (
+            <section key={meta.key} className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className={`h-2.5 w-2.5 rounded-full ${meta.dot}`} />
+                  <h2 className="font-mono-ui text-xs font-medium uppercase tracking-[.2em] text-muted">{meta.label}</h2>
+                </div>
+                <span className="rounded-pill bg-shell px-3 py-1 font-mono-ui text-[10px] uppercase tracking-[.18em] text-faint">{rows.length}</span>
+              </div>
+
+              {rows.length === 0 ? (
+                <div className="rounded-card border border-dashed border-[rgba(44,40,31,.16)] bg-white/54 p-8 text-center text-sm text-muted">
+                  No requests match this filter.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {rows.map((request) => {
+                    const expanded = expandedId === request.id;
+                    const days = request.days || [];
+
+                    return (
+                      <article key={request.id} className="overflow-hidden rounded-card border border-[rgba(44,40,31,.08)] bg-white shadow-card">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedId((current) => (current === request.id ? null : request.id))}
+                          className="flex w-full flex-col gap-4 p-4 text-left transition duration-150 ease-window hover:bg-[#fffdf9] md:flex-row md:items-center md:justify-between"
+                        >
+                          <div className="flex min-w-0 items-start gap-4">
+                            <span className="mt-1 rounded-button border border-[rgba(44,40,31,.08)] bg-shell p-1.5 text-faint">
+                              {expanded ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-3">
+                                <h3 className="truncate text-lg font-semibold text-ink">{request.traveler_name}</h3>
+                                <StatusChip status={request.status} />
                               </div>
-                              <div className="space-y-6">
-                                <div className="rounded-2xl border border-white/10 bg-[#0f1729] p-4">
-                                  <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.35em] text-slate-500">Request Details</div>
-                                  <div className="space-y-2 text-sm text-slate-400">
-                                    <div><span className="text-slate-500">Date range:</span> {format(new Date(request.start_date), 'MMM d, yyyy')} - {format(new Date(request.end_date), 'MMM d, yyyy')}</div>
-                                    <div><span className="text-slate-500">Total days:</span> {request.total_days || request.days.length}</div>
-                                    {request.budget && <div><span className="text-slate-500">Budget:</span> {request.budget}</div>}
-                                    {request.cost_center && <div><span className="text-slate-500">Cost Center:</span> {request.cost_center}</div>}
-                                    {request.data_status && <div><span className="text-slate-500">Status of data:</span> {request.data_status}</div>}
+                              <p className="mt-1 text-sm text-muted">
+                                {request.event_name || 'No event'} {request.event_location ? `- ${request.event_location}` : ''}
+                              </p>
+                              <p className="mt-1 text-xs text-faint">
+                                Requested by {request.requester_name || 'Unknown'} · Submitted {request.submitted_at ? formatDate(request.submitted_at) : formatDate(request.request_date)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="grid min-w-[220px] grid-cols-2 gap-3 text-sm md:text-right">
+                            <div>
+                              <p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-faint">Dates</p>
+                              <p className="font-medium text-ink">{formatDate(request.start_date, 'MMM d')} - {formatDate(request.end_date, 'MMM d')}</p>
+                            </div>
+                            <div>
+                              <p className="font-mono-ui text-[10px] uppercase tracking-[.18em] text-faint">Days</p>
+                              <p className="font-medium text-ink">{request.total_days || days.length || 'Not set'}</p>
+                            </div>
+                          </div>
+                        </button>
+
+                        {expanded && (
+                          <div className="border-t border-[rgba(44,40,31,.08)] bg-shell/75 p-4 md:p-5">
+                            <div className="grid gap-5 xl:grid-cols-[1.25fr_.85fr]">
+                              <div className="space-y-5">
+                                <section className="space-y-3">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <h4 className="label">Daily schedule</h4>
+                                    <span className="text-xs text-faint">{days.length} day{days.length === 1 ? '' : 's'}</span>
                                   </div>
-                                </div>
-                                <div className="space-y-2">
-                                  <div className="flex items-center justify-between">
-                                    <div className="text-[10px] font-bold uppercase tracking-[0.35em] text-slate-500">Approver / Internal Notes</div>
-                                    {canAct && (
-                                      <button onClick={() => void saveApproverNotes(request.id)} className="flex items-center gap-1 text-cyan-300 transition hover:text-white">
-                                        <Save size={12} /> Save
+                                  <div className="space-y-2">
+                                    {days.length > 0 ? (
+                                      days.map((day) => <DayRow key={day.day_date || day.day_index} day={day} />)
+                                    ) : (
+                                      <div className="rounded-field border border-dashed border-[rgba(44,40,31,.14)] bg-white p-4 text-sm text-muted">
+                                        No daily schedule was saved with this request.
+                                      </div>
+                                    )}
+                                  </div>
+                                </section>
+
+                                <section className="rounded-field border border-[rgba(44,40,31,.08)] bg-white p-4">
+                                  <h4 className="label">Submitter notes</h4>
+                                  <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-muted">{request.notes || 'No submitter notes.'}</p>
+                                </section>
+                              </div>
+
+                              <div className="space-y-5">
+                                <section className="rounded-field border border-[rgba(44,40,31,.08)] bg-white p-4 text-sm">
+                                  <h4 className="label">Request details</h4>
+                                  <div className="mt-3">
+                                    <DetailLine label="Date range" value={`${formatDate(request.start_date)} - ${formatDate(request.end_date)}`} />
+                                    <DetailLine label="Total days" value={request.total_days || days.length || null} />
+                                    <DetailLine label="Department" value={request.department} />
+                                    <DetailLine label="Budget" value={request.budget} />
+                                    <DetailLine label="Cost center" value={request.cost_center} />
+                                    <DetailLine label="Data status" value={request.data_status} />
+                                  </div>
+                                </section>
+
+                                <section className="space-y-3">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <h4 className="label">Approver notes</h4>
+                                    {canReview && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void saveApproverNotes(request)}
+                                        className="inline-flex items-center gap-1.5 rounded-button border border-[rgba(47,111,153,.18)] bg-white px-3 py-1.5 text-xs font-semibold text-sky transition duration-150 ease-window hover:bg-sky-tint"
+                                      >
+                                        <Save size={13} />
+                                        Save
                                       </button>
                                     )}
                                   </div>
-                                  {canAct ? (
-                                    <textarea
-                                      value={editingNotes[request.id] || ''}
-                                      onChange={(e) => setEditingNotes((current) => ({ ...current, [request.id]: e.target.value }))}
-                                      className="min-h-[160px] w-full rounded-2xl border border-white/10 bg-[#08101d] p-4 text-sm text-slate-300 outline-none focus:border-cyan-400"
-                                    />
-                                  ) : (
-                                    <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/5 p-4 text-sm italic text-cyan-100">
-                                      {request.approver_notes || 'No approver notes yet.'}
-                                    </div>
-                                  )}
-                                </div>
+                                  <textarea
+                                    value={canReview ? editingNotes[request.id] || '' : request.approver_notes || ''}
+                                    readOnly={!canReview}
+                                    onChange={(event) => setEditingNotes((current) => ({ ...current, [request.id]: event.target.value }))}
+                                    rows={5}
+                                    placeholder="Add reviewer context for the requester."
+                                    className={`field min-h-[136px] resize-y ${canReview ? '' : 'bg-white/70 italic text-muted'}`}
+                                  />
+                                </section>
+
+                                {canReview && (
+                                  <div className="grid gap-2 sm:grid-cols-3">
+                                    <button
+                                      type="button"
+                                      onClick={() => void updateStatus(request, 'Approved')}
+                                      className="inline-flex items-center justify-center gap-2 rounded-button bg-[#4E7A52] px-3 py-2.5 text-sm font-semibold text-white transition duration-150 ease-window hover:bg-[#446E48]"
+                                    >
+                                      <CheckCircle size={16} />
+                                      Approve
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => void updateStatus(request, 'Need More Info')}
+                                      className="inline-flex items-center justify-center gap-2 rounded-button bg-gold px-3 py-2.5 text-sm font-semibold text-ink transition duration-150 ease-window hover:bg-gold-deep hover:text-white"
+                                    >
+                                      <Info size={16} />
+                                      Need info
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => void updateStatus(request, 'Not Approved')}
+                                      className="inline-flex items-center justify-center gap-2 rounded-button bg-[#A8694E] px-3 py-2.5 text-sm font-semibold text-white transition duration-150 ease-window hover:bg-[#965B42]"
+                                    >
+                                      <XCircle size={16} />
+                                      Decline
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             </div>
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        );
-      })}
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          );
+        })}
+      </div>
+
+      {visibleCount === 0 && activeFilter === 'all' && (
+        <div className="rounded-card border border-dashed border-[rgba(44,40,31,.16)] bg-white/60 p-10 text-center text-sm text-muted">
+          No requests match the current search.
+        </div>
+      )}
     </div>
   );
 }

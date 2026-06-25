@@ -21,6 +21,8 @@ export type EventItem = {
   event_status?: string | null;
   start_date?: string | null;
   end_date?: string | null;
+  is_active?: boolean;
+  archived?: boolean;
 };
 
 export type RequestDay = {

@@ -102,6 +102,17 @@ CREATE TABLE IF NOT EXISTS request_tasks (
     status TEXT DEFAULT 'Not Started'
 );
 
+CREATE TABLE IF NOT EXISTS request_messages (
+    id SERIAL PRIMARY KEY,
+    request_id INTEGER NOT NULL REFERENCES travel_requests(id) ON DELETE CASCADE,
+    author_email TEXT NOT NULL,
+    author_name TEXT,
+    author_role TEXT,
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_messages_request_id ON request_messages (request_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_travel_requests_requester_id ON travel_requests (requester_id);
 CREATE INDEX IF NOT EXISTS idx_travel_requests_traveler_email ON travel_requests (traveler_email);
 CREATE INDEX IF NOT EXISTS idx_request_days_request_id ON request_days (request_id);

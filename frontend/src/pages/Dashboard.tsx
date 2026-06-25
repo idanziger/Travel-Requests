@@ -6,6 +6,15 @@ import type { AuthUser, RequestDay, TravelRequest } from '../types';
 
 type StatusKey = 'all' | 'awaiting' | 'needInfo' | 'approved' | 'notApproved';
 
+type ThreadMessage = {
+  id: number;
+  author_email: string;
+  author_name?: string | null;
+  author_role?: string | null;
+  body: string;
+  created_at: string;
+};
+
 type StatusMeta = {
   key: Exclude<StatusKey, 'all'>;
   label: string;
@@ -29,7 +38,7 @@ const statusMetas: StatusMeta[] = [
   {
     key: 'needInfo',
     label: 'Need More Info',
-    backend: 'Need More Info',
+    backend: 'Need More Information',
     bg: 'bg-[#F6EAD6]',
     fg: 'text-[#B07A2E]',
     dot: 'bg-[#D99A4E]',
@@ -136,8 +145,33 @@ function Dashboard({ user }: { user: AuthUser }) {
   const [editingNotes, setEditingNotes] = useState<Record<number, string>>({});
   const [query, setQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<StatusKey>('all');
+  const [messages, setMessages] = useState<Record<number, ThreadMessage[]>>({});
+  const [replyDraft, setReplyDraft] = useState<Record<number, string>>({});
+  const [sendingReply, setSendingReply] = useState(false);
 
   const canReview = user.role === 'admin';
+
+  const loadMessages = async (requestId: number) => {
+    try {
+      const res = await axios.get(`/api/requests/${requestId}/messages`);
+      setMessages((current) => ({ ...current, [requestId]: Array.isArray(res.data) ? res.data : [] }));
+    } catch {
+      setMessages((current) => ({ ...current, [requestId]: [] }));
+    }
+  };
+
+  const postReply = async (requestId: number) => {
+    const body = (replyDraft[requestId] || '').trim();
+    if (!body) return;
+    setSendingReply(true);
+    try {
+      await axios.post(`/api/requests/${requestId}/messages`, { body });
+      setReplyDraft((current) => ({ ...current, [requestId]: '' }));
+      await loadMessages(requestId);
+    } finally {
+      setSendingReply(false);
+    }
+  };
 
   const fetchRequests = async () => {
     setLoading(true);
@@ -160,12 +194,17 @@ function Dashboard({ user }: { user: AuthUser }) {
     void fetchRequests();
   }, [user.id]);
 
+  useEffect(() => {
+    if (expandedId != null) void loadMessages(expandedId);
+  }, [expandedId]);
+
   const updateStatus = async (request: TravelRequest, status: string) => {
     await axios.patch(`/api/requests/${request.id}/status`, {
       status,
       approver_notes: editingNotes[request.id] || '',
     });
     await fetchRequests();
+    await loadMessages(request.id);
   };
 
   const saveApproverNotes = async (request: TravelRequest) => {
@@ -174,6 +213,7 @@ function Dashboard({ user }: { user: AuthUser }) {
       approver_notes: editingNotes[request.id] || '',
     });
     await fetchRequests();
+    await loadMessages(request.id);
   };
 
   const searchedRequests = useMemo(() => {
@@ -395,7 +435,7 @@ function Dashboard({ user }: { user: AuthUser }) {
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => void updateStatus(request, 'Need More Info')}
+                                      onClick={() => void updateStatus(request, 'Need More Information')}
                                       className="inline-flex items-center justify-center gap-2 rounded-button bg-gold px-3 py-2.5 text-sm font-semibold text-ink transition duration-150 ease-window hover:bg-gold-deep hover:text-white"
                                     >
                                       <Info size={16} />
@@ -413,6 +453,44 @@ function Dashboard({ user }: { user: AuthUser }) {
                                 )}
                               </div>
                             </div>
+
+                            <section className="mt-5 rounded-field border border-[rgba(44,40,31,.08)] bg-white p-4">
+                              <h4 className="label">Messages</h4>
+                              <div className="mt-3 space-y-2.5">
+                                {(messages[request.id] || []).length === 0 ? (
+                                  <p className="text-sm text-muted">No messages yet. Start the conversation below.</p>
+                                ) : (
+                                  (messages[request.id] || []).map((message) => (
+                                    <div key={message.id} className="rounded-field bg-shell px-3.5 py-2.5">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="text-sm font-semibold text-ink">{message.author_name || message.author_email}</span>
+                                        <span className="font-mono-ui text-[10px] uppercase tracking-[.14em] text-faint">
+                                          {new Date(message.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                        </span>
+                                      </div>
+                                      <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-muted">{message.body}</p>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                              <div className="mt-3 flex gap-2">
+                                <textarea
+                                  value={replyDraft[request.id] || ''}
+                                  onChange={(event) => setReplyDraft((current) => ({ ...current, [request.id]: event.target.value }))}
+                                  rows={2}
+                                  placeholder="Write a reply…"
+                                  className="field flex-1 resize-y"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={sendingReply || !(replyDraft[request.id] || '').trim()}
+                                  onClick={() => void postReply(request.id)}
+                                  className="h-fit shrink-0 rounded-button bg-sky px-4 py-2.5 text-sm font-semibold text-white transition duration-150 ease-window hover:bg-sky-hover disabled:opacity-50"
+                                >
+                                  Send
+                                </button>
+                              </div>
+                            </section>
                           </div>
                         )}
                       </article>

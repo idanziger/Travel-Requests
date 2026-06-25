@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { getGoogleAuthUrl, getGoogleUser } from './auth';
 import pool, { query } from './db';
-import { notifyNewRequest, notifyStatusChange } from './notifications';
+import { notifyNewRequest, notifyStatusChange, notifyNewMessage } from './notifications';
 import {
   debugGroupMembership,
   debugListGroupMembers,
@@ -192,7 +192,7 @@ const getOptionsPayload = async () => {
     query(
       `SELECT id, name, location, event_status, start_date, end_date
        FROM events
-       WHERE is_active = true
+       WHERE is_active = true AND (end_date IS NULL OR end_date > CURRENT_DATE)
        ORDER BY start_date NULLS LAST, name ASC`
     ),
   ]);
@@ -359,11 +359,24 @@ app.get('/api/users/search', requireAuth, async (req: AuthenticatedRequest, res)
   }
 });
 
+// An event is archived if it was manually archived (is_active=false) OR its end date has passed.
+const EVENT_ARCHIVED_EXPR = '(is_active = false OR (end_date IS NOT NULL AND end_date <= CURRENT_DATE))';
+
 app.get('/api/events', requireAuth, async (req, res) => {
+  const view = String(req.query.view || 'active').toLowerCase();
+  let whereClause = '';
+  if (view === 'active') {
+    whereClause = `WHERE NOT ${EVENT_ARCHIVED_EXPR}`;
+  } else if (view === 'archived') {
+    whereClause = `WHERE ${EVENT_ARCHIVED_EXPR}`;
+  }
+
   try {
     const result = await query(
-      `SELECT id, name, location, event_status, start_date, end_date, is_active
+      `SELECT id, name, location, event_status, start_date, end_date, is_active,
+              ${EVENT_ARCHIVED_EXPR} AS archived
        FROM events
+       ${whereClause}
        ORDER BY start_date NULLS LAST, name ASC`
     );
     res.json(result.rows);
@@ -412,12 +425,23 @@ app.patch('/api/events/:id', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+// Archive an event (reversible). Linked requests are untouched and stay viewable.
 app.delete('/api/events/:id', requireAuth, requireAdmin, async (req, res) => {
   try {
     await query(`UPDATE events SET is_active = false, updated_at = NOW() WHERE id = $1`, [req.params.id]);
     res.status(204).send();
   } catch (error) {
     res.status(500).json({ error: 'Failed to archive event' });
+  }
+});
+
+// Restore a manually-archived event. (An event past its end date stays archived by date.)
+app.post('/api/events/:id/restore', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await query(`UPDATE events SET is_active = true, updated_at = NOW() WHERE id = $1`, [req.params.id]);
+    res.status(200).json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to restore event' });
   }
 });
 
@@ -656,6 +680,17 @@ app.patch('/api/requests/:id/status', requireAuth, async (req: AuthenticatedRequ
       [finalStatus, approver_notes || null, requestId]
     );
 
+    const noteText = typeof approver_notes === 'string' ? approver_notes.trim() : '';
+
+    // A note from the approver becomes a message in the request thread.
+    if (noteText) {
+      await query(
+        `INSERT INTO request_messages (request_id, author_email, author_name, author_role, body)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [requestId, req.user!.email, req.user!.name, req.user!.role, noteText]
+      );
+    }
+
     if (nextStatus) {
       await notifyStatusChange({
         requesterEmail: existing.requester_email,
@@ -663,6 +698,10 @@ app.patch('/api/requests/:id/status', requireAuth, async (req: AuthenticatedRequ
         travelerName: existing.traveler_name,
         status: finalStatus,
         eventName: existing.event_name,
+        note: noteText || null,
+        startDate: existing.start_date,
+        endDate: existing.end_date,
+        totalDays: existing.total_days,
       });
     }
 
@@ -670,6 +709,94 @@ app.patch('/api/requests/:id/status', requireAuth, async (req: AuthenticatedRequ
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to update request' });
+  }
+});
+
+app.get('/api/requests/:id/messages', requireAuth, async (req: AuthenticatedRequest, res) => {
+  const requestId = parsePositiveIntegerParam(req.params.id);
+  if (!requestId) {
+    return res.status(400).json({ error: 'Invalid request id' });
+  }
+
+  try {
+    const reqRow = await query(
+      `SELECT requester_id, traveler_user_id, traveler_email FROM travel_requests WHERE id = $1`,
+      [requestId]
+    );
+    const row = reqRow.rows[0];
+    if (!row) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    if (!canViewRequestRow(req.user!, row)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const messages = await query(
+      `SELECT id, author_email, author_name, author_role, body, created_at
+       FROM request_messages
+       WHERE request_id = $1
+       ORDER BY created_at ASC`,
+      [requestId]
+    );
+    res.json(messages.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to load messages' });
+  }
+});
+
+app.post('/api/requests/:id/messages', requireAuth, async (req: AuthenticatedRequest, res) => {
+  const requestId = parsePositiveIntegerParam(req.params.id);
+  if (!requestId) {
+    return res.status(400).json({ error: 'Invalid request id' });
+  }
+
+  const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
+  if (!body) {
+    return res.status(400).json({ error: 'Message body required' });
+  }
+
+  try {
+    const details = await query(
+      `SELECT r.*, requester.email AS requester_email, requester.name AS requester_name
+       FROM travel_requests r
+       JOIN users requester ON r.requester_id = requester.id
+       WHERE r.id = $1`,
+      [requestId]
+    );
+    const reqRow = details.rows[0];
+    if (!reqRow) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    if (!canViewRequestRow(req.user!, reqRow)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const inserted = await query(
+      `INSERT INTO request_messages (request_id, author_email, author_name, author_role, body)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, author_email, author_name, author_role, body, created_at`,
+      [requestId, req.user!.email, req.user!.name, req.user!.role, body]
+    );
+
+    try {
+      await notifyNewMessage({
+        requesterEmail: reqRow.requester_email,
+        travelerEmail: reqRow.traveler_email,
+        travelerName: reqRow.traveler_name,
+        eventName: reqRow.event_name,
+        authorName: req.user!.name,
+        authorEmail: req.user!.email,
+        message: body,
+      });
+    } catch (notifyError) {
+      console.error('Failed to send new-message notification', notifyError);
+    }
+
+    res.status(201).json(inserted.rows[0]);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to post message' });
   }
 });
 

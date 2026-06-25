@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { ChevronRight, Search } from 'lucide-react';
 import type { EventItem, TravelRequest } from '../types';
 
-type FilterKey = 'upcoming' | 'past' | 'all';
+type FilterKey = 'active' | 'archived' | 'all';
 
 const parseISO = (value?: string | null): Date | null => {
   if (!value) return null;
@@ -19,7 +19,7 @@ const initials = (name: string) =>
 
 const STATUS: Record<string, { label: string; bg: string; fg: string }> = {
   'Awaiting Response': { label: 'Awaiting', bg: '#E7F0F6', fg: '#2F6F99' },
-  'Need More Info': { label: 'Need Info', bg: '#F6EAD6', fg: '#B07A2E' },
+  'Need More Information': { label: 'Need Info', bg: '#F6EAD6', fg: '#B07A2E' },
   Approved: { label: 'Approved', bg: '#E6F0E4', fg: '#4E7A52' },
   'Not Approved': { label: 'Not Approved', bg: '#F3E7E1', fg: '#A8694E' },
 };
@@ -29,13 +29,16 @@ function Events() {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [requests, setRequests] = useState<TravelRequest[]>([]);
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<FilterKey>('upcoming');
+  const [filter, setFilter] = useState<FilterKey>('active');
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     const load = async () => {
-      const [config, reqs] = await Promise.all([axios.get('/api/config'), axios.get('/api/requests')]);
-      setEvents(Array.isArray(config.data?.events) ? config.data.events : []);
+      const [eventsRes, reqs] = await Promise.all([
+        axios.get('/api/events', { params: { view: 'all' } }),
+        axios.get('/api/requests'),
+      ]);
+      setEvents(Array.isArray(eventsRes.data) ? eventsRes.data : []);
       setRequests(Array.isArray(reqs.data) ? reqs.data : []);
     };
     void load();
@@ -52,27 +55,26 @@ function Events() {
   }, [requests]);
 
   const decorated = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
     const q = query.trim().toLowerCase();
     return events
       .filter((ev) => !q || `${ev.name} ${ev.location ?? ''}`.toLowerCase().includes(q))
       .map((ev) => {
         const start = parseISO(ev.start_date);
-        const upcoming = start ? start >= today : true;
+        const archived = !!ev.archived;
+        const manualArchive = ev.is_active === false;
         const roster = rosterByEvent.get(Number(ev.id)) || [];
-        return { ev, start, upcoming, roster };
+        return { ev, start, archived, manualArchive, roster };
       })
       .sort((a, b) => (a.start?.getTime() ?? 0) - (b.start?.getTime() ?? 0));
   }, [events, rosterByEvent, query]);
 
-  const upCount = decorated.filter((d) => d.upcoming).length;
-  const pastCount = decorated.filter((d) => !d.upcoming).length;
-  const list = decorated.filter((d) => (filter === 'all' ? true : filter === 'upcoming' ? d.upcoming : !d.upcoming));
+  const activeCount = decorated.filter((d) => !d.archived).length;
+  const archivedCount = decorated.filter((d) => d.archived).length;
+  const list = decorated.filter((d) => (filter === 'all' ? true : filter === 'active' ? !d.archived : d.archived));
 
   const pills: { key: FilterKey; label: string; count: number }[] = [
-    { key: 'upcoming', label: 'Upcoming', count: upCount },
-    { key: 'past', label: 'Past', count: pastCount },
+    { key: 'active', label: 'Active', count: activeCount },
+    { key: 'archived', label: 'Archived', count: archivedCount },
     { key: 'all', label: 'All', count: decorated.length },
   ];
 
@@ -121,7 +123,7 @@ function Events() {
       </div>
 
       <div className="mt-6 flex flex-col gap-3">
-        {list.map(({ ev, start, upcoming, roster }) => {
+        {list.map(({ ev, start, archived, manualArchive, roster }) => {
           const isOpen = !!expanded[ev.id];
           const approved = roster.filter((r) => r.status === 'Approved').length;
           return (
@@ -134,13 +136,13 @@ function Events() {
                 <div
                   className="w-[54px] shrink-0 rounded-field border py-2 text-center"
                   style={{
-                    background: upcoming ? '#EAF2F6' : '#F2EDE3',
-                    borderColor: upcoming ? '#d4e4ee' : 'rgba(44,40,31,.08)',
+                    background: !archived ? '#EAF2F6' : '#F2EDE3',
+                    borderColor: !archived ? '#d4e4ee' : 'rgba(44,40,31,.08)',
                   }}
                 >
                   <div
                     className="font-mono-ui text-[10px] uppercase tracking-[.1em]"
-                    style={{ color: upcoming ? '#2F6F99' : '#a99f8e' }}
+                    style={{ color: !archived ? '#2F6F99' : '#a99f8e' }}
                   >
                     {start ? start.toLocaleDateString('en-US', { month: 'short' }).toUpperCase() : '—'}
                   </div>
@@ -153,11 +155,11 @@ function Events() {
                     <span
                       className="shrink-0 rounded-pill px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[.04em]"
                       style={{
-                        background: upcoming ? '#E7F0F6' : '#ECE6DA',
-                        color: upcoming ? '#2F6F99' : '#9a9082',
+                        background: !archived ? '#E7F0F6' : manualArchive ? '#F6EAD6' : '#ECE6DA',
+                        color: !archived ? '#2F6F99' : manualArchive ? '#B07A2E' : '#9a9082',
                       }}
                     >
-                      {upcoming ? 'Upcoming' : 'Past'}
+                      {!archived ? 'Active' : manualArchive ? 'Archived' : 'Past'}
                     </span>
                   </div>
                   <div className="mt-1 text-[13px] text-faint">

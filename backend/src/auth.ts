@@ -18,9 +18,10 @@ const client = new OAuth2Client(
 );
 
 export const getGoogleAuthUrl = () => {
+  // Login only needs identity (email/profile); the app uses domain-wide delegation
+  // for Gmail/Directory, not the user's token. So no offline/consent prompt — let
+  // Google skip the approval screen once the user has authorized once.
   return client.generateAuthUrl({
-    access_type: 'offline',
-    prompt: 'consent',
     scope: [
       'https://www.googleapis.com/auth/userinfo.profile',
       'https://www.googleapis.com/auth/userinfo.email',

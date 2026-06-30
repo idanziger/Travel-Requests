@@ -148,8 +148,39 @@ function Dashboard({ user }: { user: AuthUser }) {
   const [messages, setMessages] = useState<Record<number, ThreadMessage[]>>({});
   const [replyDraft, setReplyDraft] = useState<Record<number, string>>({});
   const [sendingReply, setSendingReply] = useState(false);
+  const [statusSubmitting, setStatusSubmitting] = useState<{ id: number; status: string } | null>(null);
+  const [pendingDecision, setPendingDecision] = useState<{ id: number; status: string } | null>(null);
 
   const canReview = user.role === 'admin';
+
+  // Plan B: pick a decision → confirm bar → commit. Each decision's copy, colour,
+  // and whether a note is required before it can be sent.
+  const DECISIONS: Record<
+    string,
+    { verb: string; pending: string; question: string; requiresNote: boolean; btnClass: string }
+  > = {
+    Approved: {
+      verb: 'Approve',
+      pending: 'Approving…',
+      question: 'Approve this request and notify everyone?',
+      requiresNote: false,
+      btnClass: 'bg-[#4E7A52] text-white hover:bg-[#446E48]',
+    },
+    'Need More Information': {
+      verb: 'Request more info',
+      pending: 'Sending…',
+      question: 'Send this back for more info and notify everyone?',
+      requiresNote: true,
+      btnClass: 'bg-gold text-ink hover:bg-gold-deep hover:text-white',
+    },
+    'Not Approved': {
+      verb: 'Decline',
+      pending: 'Declining…',
+      question: 'Decline this request and notify everyone?',
+      requiresNote: true,
+      btnClass: 'bg-[#A8694E] text-white hover:bg-[#965B42]',
+    },
+  };
 
   const loadMessages = async (requestId: number) => {
     try {
@@ -199,12 +230,22 @@ function Dashboard({ user }: { user: AuthUser }) {
   }, [expandedId]);
 
   const updateStatus = async (request: TravelRequest, status: string) => {
-    await axios.patch(`/api/requests/${request.id}/status`, {
-      status,
-      approver_notes: editingNotes[request.id] || '',
-    });
-    await fetchRequests();
-    await loadMessages(request.id);
+    // Guard against double-fire: ignore clicks while a status change is in flight.
+    if (statusSubmitting) return;
+    setStatusSubmitting({ id: request.id, status });
+    try {
+      await axios.patch(`/api/requests/${request.id}/status`, {
+        status,
+        approver_notes: editingNotes[request.id] || '',
+      });
+      await fetchRequests();
+      // The note has been emailed + posted to the thread — clear the compose box.
+      setEditingNotes((current) => ({ ...current, [request.id]: '' }));
+      setPendingDecision(null);
+      await loadMessages(request.id);
+    } finally {
+      setStatusSubmitting(null);
+    }
   };
 
   const saveApproverNotes = async (request: TravelRequest) => {
@@ -423,34 +464,74 @@ function Dashboard({ user }: { user: AuthUser }) {
                                   />
                                 </section>
 
-                                {canReview && (
-                                  <div className="grid gap-2 sm:grid-cols-3">
-                                    <button
-                                      type="button"
-                                      onClick={() => void updateStatus(request, 'Approved')}
-                                      className="inline-flex items-center justify-center gap-2 rounded-button bg-[#4E7A52] px-3 py-2.5 text-sm font-semibold text-white transition duration-150 ease-window hover:bg-[#446E48]"
-                                    >
-                                      <CheckCircle size={16} />
-                                      Approve
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => void updateStatus(request, 'Need More Information')}
-                                      className="inline-flex items-center justify-center gap-2 rounded-button bg-gold px-3 py-2.5 text-sm font-semibold text-ink transition duration-150 ease-window hover:bg-gold-deep hover:text-white"
-                                    >
-                                      <Info size={16} />
-                                      Need info
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => void updateStatus(request, 'Not Approved')}
-                                      className="inline-flex items-center justify-center gap-2 rounded-button bg-[#A8694E] px-3 py-2.5 text-sm font-semibold text-white transition duration-150 ease-window hover:bg-[#965B42]"
-                                    >
-                                      <XCircle size={16} />
-                                      Decline
-                                    </button>
-                                  </div>
-                                )}
+                                {canReview && (() => {
+                                  const pending = pendingDecision?.id === request.id ? pendingDecision.status : null;
+                                  const busy = statusSubmitting?.id === request.id;
+
+                                  if (pending) {
+                                    const meta = DECISIONS[pending];
+                                    const noteMissing = meta.requiresNote && !(editingNotes[request.id] || '').trim();
+                                    return (
+                                      <div className="rounded-field border border-[rgba(44,40,31,.12)] bg-shell p-4 space-y-3">
+                                        <p className="text-sm font-semibold text-ink">{meta.question}</p>
+                                        {noteMissing && (
+                                          <p className="text-xs font-medium text-[#A8694E]">
+                                            A note is required to {meta.verb.toLowerCase()} — add one above before confirming.
+                                          </p>
+                                        )}
+                                        <div className="flex flex-wrap gap-2">
+                                          <button
+                                            type="button"
+                                            disabled={busy}
+                                            onClick={() => setPendingDecision(null)}
+                                            className="inline-flex items-center justify-center gap-2 rounded-button border border-[rgba(44,40,31,.18)] bg-white px-4 py-2.5 text-sm font-semibold text-ink transition duration-150 ease-window hover:bg-shell disabled:cursor-not-allowed disabled:opacity-50"
+                                          >
+                                            Cancel
+                                          </button>
+                                          <button
+                                            type="button"
+                                            disabled={busy || noteMissing}
+                                            onClick={() => void updateStatus(request, pending)}
+                                            className={`inline-flex items-center justify-center gap-2 rounded-button px-4 py-2.5 text-sm font-semibold transition duration-150 ease-window disabled:cursor-not-allowed disabled:opacity-50 ${meta.btnClass}`}
+                                          >
+                                            {busy
+                                              ? <><RefreshCw size={16} className="animate-spin" />{meta.pending}</>
+                                              : <><CheckCircle size={16} />Confirm: {meta.verb}</>}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
+                                  return (
+                                    <div className="grid gap-2 sm:grid-cols-3">
+                                      <button
+                                        type="button"
+                                        onClick={() => setPendingDecision({ id: request.id, status: 'Approved' })}
+                                        className="inline-flex items-center justify-center gap-2 rounded-button bg-[#4E7A52] px-3 py-2.5 text-sm font-semibold text-white transition duration-150 ease-window hover:bg-[#446E48]"
+                                      >
+                                        <CheckCircle size={16} />
+                                        Approve
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setPendingDecision({ id: request.id, status: 'Need More Information' })}
+                                        className="inline-flex items-center justify-center gap-2 rounded-button bg-gold px-3 py-2.5 text-sm font-semibold text-ink transition duration-150 ease-window hover:bg-gold-deep hover:text-white"
+                                      >
+                                        <Info size={16} />
+                                        Need info
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setPendingDecision({ id: request.id, status: 'Not Approved' })}
+                                        className="inline-flex items-center justify-center gap-2 rounded-button bg-[#A8694E] px-3 py-2.5 text-sm font-semibold text-white transition duration-150 ease-window hover:bg-[#965B42]"
+                                      >
+                                        <XCircle size={16} />
+                                        Decline
+                                      </button>
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             </div>
 

@@ -207,7 +207,7 @@ export const notifyNewRequest = async (params: {
   await dispatch(params, (p) => {
     if (p === 'approver')
       return {
-        subject: `Review needed: ${params.travelerName} — ${params.eventName}`,
+        subject: `Action Needed: New Travel request for ${params.eventName}`,
         html: shell('A travel request needs your review', `${params.requesterName} submitted a request for ${params.travelerName} to ${params.eventName}.`, rows, '', 'Review request'),
       };
     if (p === 'traveler')

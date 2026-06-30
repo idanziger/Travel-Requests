@@ -691,7 +691,10 @@ app.patch('/api/requests/:id/status', requireAuth, async (req: AuthenticatedRequ
       );
     }
 
-    if (nextStatus) {
+    // Only notify on a genuine status transition — a repeated PATCH with the
+    // same status (double-click, retry, second tab) updates notes but sends no
+    // duplicate email.
+    if (nextStatus && nextStatus !== existing.status) {
       await notifyStatusChange({
         requesterEmail: existing.requester_email,
         travelerEmail: existing.traveler_email,
